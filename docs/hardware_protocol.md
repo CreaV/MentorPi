@@ -119,7 +119,7 @@ speed4 =  motor4 / (pi * wheel_diameter)
 
 ### 里程计（Odometry）
 
-`base_node` 以 50Hz 发布 `/odom` 话题和 `odom → base_link` TF 变换，使用指令积分（dead-reckoning）方式：
+`base_node` 以 50Hz 发布 `/odom` 话题，使用指令积分（dead-reckoning）方式：
 
 ```python
 # 将 body 坐标系速度旋转到 world 坐标系
@@ -129,8 +129,51 @@ dyaw = wz * dt
 ```
 
 - **无编码器反馈**：STM32 协议未实现电机状态回传，官方 SDK 同样使用指令积分
-- **漂移补偿**：依赖 slam_toolbox 的激光匹配进行校正
+- **漂移补偿**：2D 模式依赖 EKF + slam_toolbox 校正；3D 模式依赖视觉里程计
 - **协方差**：静止时设为 1e-9，运动时设为 1e-3
+- **odom→base_link TF**：参数 `publish_odom_tf` 控制（默认 False，由 EKF 或 rgbd_odometry 接管）
+
+---
+
+## IMU 数据读取 (Function=7)
+
+### 协议格式
+
+STM32 主动上报 IMU 数据，无需请求命令。
+
+| 字段 | 类型 | 单位 | 说明 |
+|------|------|------|------|
+| ax | float32 LE | g | 加速度 X |
+| ay | float32 LE | g | 加速度 Y |
+| az | float32 LE | g | 加速度 Z |
+| gx | float32 LE | deg/s | 角速度 X |
+| gy | float32 LE | deg/s | 角速度 Y |
+| gz | float32 LE | deg/s | 角速度 Z |
+
+共 24 字节（6 × float32）。
+
+### 解析示例
+
+```python
+ax, ay, az, gx, gy, gz = struct.unpack('<6f', data)  # data = 24 bytes
+```
+
+### base_node 中的实现
+
+`base_node` 启动后台接收线程，用状态机解析串口数据包（与官方 SDK `recv_task` 一致）：
+
+1. **接收线程** (`_recv_loop`)：逐字节状态机，匹配 `0xAA 0x55` 头 → Function → Length → Data → CRC8 校验
+2. **IMU 发布** (`_publish_imu`)：Function=7 且 data 长度=24 时触发
+3. **单位转换**：加速度 g → m/s²（×9.80665），角速度 deg/s → rad/s
+4. **orientation**：不估计（`orientation_covariance[0] = -1.0`，ROS 惯例表示无效）
+5. **话题**：`/imu/data_raw`（`sensor_msgs/Imu`）
+
+### 注意事项
+
+- STM32 上电后自动上报，无需发送使能命令
+- 串口打开后需等待约 0.5 秒让 STM32 稳定
+- 接收线程与发送（电机/舵机命令）共用同一串口，Python `serial.Serial` 读写线程安全
+- `/dev/ttyACM0` 重启后才可靠出现；如缺失，检查 USB 连接或重启 Pi
 
 ---
 

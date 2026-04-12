@@ -8,6 +8,7 @@ from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 
 def generate_launch_description():
+    bringup_dir = get_package_share_directory('mentorpi_bringup')
     camera_type = LaunchConfiguration('camera_type')
 
     return LaunchDescription([
@@ -15,13 +16,43 @@ def generate_launch_description():
         DeclareLaunchArgument('camera_type', default_value='opencv',
             description='Camera: opencv or gemini2l'),
 
-        # 1. 串口驱动 (Base)
+        # 1. 串口驱动 (Base) — odom TF由EKF发布
         Node(
             package='mentorpi_base',
             executable='base_node',
             name='mentorpi_base',
-            parameters=[{'port': '/dev/ttyACM0', 'baudrate': 1000000}],
+            parameters=[{
+                'port': '/dev/ttyACM0',
+                'baudrate': 1000000,
+                'publish_odom_tf': False,
+            }],
             output='screen'
+        ),
+
+        # 1b. IMU 滤波 (Madgwick) — /imu/data_raw → /imu/data
+        Node(
+            package='imu_filter_madgwick',
+            executable='imu_filter_madgwick_node',
+            name='imu_filter_madgwick_node',
+            output='screen',
+            parameters=[
+                os.path.join(bringup_dir, 'config', 'imu_filter.yaml')
+            ],
+            remappings=[
+                ('/imu/data_raw', '/imu/data_raw'),
+                ('/imu/data', '/imu/data'),
+            ],
+        ),
+
+        # 1c. EKF (robot_localization) — /odom + /imu/data → /odometry/filtered + TF odom→base_link
+        Node(
+            package='robot_localization',
+            executable='ekf_node',
+            name='ekf_filter_node',
+            output='screen',
+            parameters=[
+                os.path.join(bringup_dir, 'config', 'ekf.yaml')
+            ],
         ),
 
         # 2a. OpenCV 相机 (camera_type == opencv)

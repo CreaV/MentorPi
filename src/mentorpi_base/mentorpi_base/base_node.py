@@ -2,11 +2,14 @@ import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist, TransformStamped, Quaternion
 from nav_msgs.msg import Odometry
+from sensor_msgs.msg import Imu
 from mentorpi_msgs.msg import Gimbal, MotorStatus
 from tf2_ros import TransformBroadcaster
 import serial
 import struct
 import math
+import threading
+import time
 
 
 def yaw_to_quaternion(yaw):
@@ -45,6 +48,17 @@ def checksum_crc8(data):
 
 FUNC_MOTOR = 3
 FUNC_PWM_SERVO = 4
+FUNC_IMU = 7
+
+GRAVITY = 9.80665
+
+# Packet parser states
+STATE_START1 = 0
+STATE_START2 = 1
+STATE_FUNC = 2
+STATE_LEN = 3
+STATE_DATA = 4
+STATE_CRC = 5
 
 class MentorPiBase(Node):
     def __init__(self):
@@ -82,9 +96,105 @@ class MentorPiBase(Node):
         self.cmd_wz = 0.0
         self.last_odom_time = self.get_clock().now()
 
+        self.declare_parameter('publish_odom_tf', False)
+        self.publish_odom_tf = self.get_parameter('publish_odom_tf').value
+
         self.odom_pub = self.create_publisher(Odometry, '/odom', 10)
+        self.imu_pub = self.create_publisher(Imu, '/imu/data_raw', 10)
         self.tf_broadcaster = TransformBroadcaster(self)
         self.create_timer(0.02, self.odom_timer_callback)  # 50 Hz
+
+        # Start serial receive thread for IMU data
+        if self.ser:
+            time.sleep(0.5)  # let STM32 settle after port open
+            self._recv_thread = threading.Thread(target=self._recv_loop, daemon=True)
+            self._recv_thread.start()
+            self.get_logger().info("IMU receive thread started")
+
+    def _recv_loop(self):
+        """Background thread: parse incoming packets from STM32."""
+        state = STATE_START1
+        frame = []
+        recv_count = 0
+
+        while rclpy.ok():
+            try:
+                raw = self.ser.read(64)
+            except Exception:
+                break
+            if not raw:
+                continue
+            for dat in raw:
+                if state == STATE_START1:
+                    if dat == 0xAA:
+                        state = STATE_START2
+                elif state == STATE_START2:
+                    if dat == 0x55:
+                        state = STATE_FUNC
+                    else:
+                        state = STATE_START1
+                elif state == STATE_FUNC:
+                    if dat < 12:  # valid function codes 0-11
+                        frame = [dat, 0]
+                        state = STATE_LEN
+                    else:
+                        state = STATE_START1
+                elif state == STATE_LEN:
+                    frame[1] = dat
+                    recv_count = 0
+                    state = STATE_DATA if dat > 0 else STATE_CRC
+                elif state == STATE_DATA:
+                    frame.append(dat)
+                    recv_count += 1
+                    if recv_count >= frame[1]:
+                        state = STATE_CRC
+                elif state == STATE_CRC:
+                    if checksum_crc8(bytes(frame)) == dat:
+                        func = frame[0]
+                        data = bytes(frame[2:])
+                        if func == FUNC_IMU and len(data) == 24:
+                            self._publish_imu(data)
+                    state = STATE_START1
+
+    def _publish_imu(self, data):
+        ax, ay, az, gx, gy, gz = struct.unpack('<6f', data)
+
+        msg = Imu()
+        msg.header.frame_id = 'imu_link'
+        msg.header.stamp = self.get_clock().now().to_msg()
+
+        # No orientation estimate from raw IMU
+        msg.orientation.w = 0.0
+        msg.orientation.x = 0.0
+        msg.orientation.y = 0.0
+        msg.orientation.z = 0.0
+        msg.orientation_covariance = [
+            -1.0, 0.0, 0.0,
+             0.0, 0.0, 0.0,
+             0.0, 0.0, 0.0,
+        ]
+
+        # Accelerometer: g -> m/s²
+        msg.linear_acceleration.x = ax * GRAVITY
+        msg.linear_acceleration.y = ay * GRAVITY
+        msg.linear_acceleration.z = az * GRAVITY
+        msg.linear_acceleration_covariance = [
+            0.0004, 0.0, 0.0,
+            0.0, 0.0004, 0.0,
+            0.0, 0.0, 0.004,
+        ]
+
+        # Gyroscope: deg/s -> rad/s
+        msg.angular_velocity.x = math.radians(gx)
+        msg.angular_velocity.y = math.radians(gy)
+        msg.angular_velocity.z = math.radians(gz)
+        msg.angular_velocity_covariance = [
+            0.01, 0.0, 0.0,
+            0.0, 0.01, 0.0,
+            0.0, 0.0, 0.01,
+        ]
+
+        self.imu_pub.publish(msg)
 
     def send_packet(self, func, data):
         if not self.ser:
@@ -119,16 +229,17 @@ class MentorPiBase(Node):
         q = yaw_to_quaternion(self.pose_yaw)
         stamp = now.to_msg()
 
-        # Publish odom -> base_link TF
-        t = TransformStamped()
-        t.header.stamp = stamp
-        t.header.frame_id = 'odom'
-        t.child_frame_id = 'base_link'
-        t.transform.translation.x = self.pose_x
-        t.transform.translation.y = self.pose_y
-        t.transform.translation.z = 0.0
-        t.transform.rotation = q
-        self.tf_broadcaster.sendTransform(t)
+        # Publish odom -> base_link TF (only when EKF is not handling it)
+        if self.publish_odom_tf:
+            t = TransformStamped()
+            t.header.stamp = stamp
+            t.header.frame_id = 'odom'
+            t.child_frame_id = 'base_link'
+            t.transform.translation.x = self.pose_x
+            t.transform.translation.y = self.pose_y
+            t.transform.translation.z = 0.0
+            t.transform.rotation = q
+            self.tf_broadcaster.sendTransform(t)
 
         # Publish Odometry message
         odom = Odometry()
