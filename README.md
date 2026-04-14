@@ -1,140 +1,319 @@
-# MentorPi ROS 2 项目开发文档
+# MentorPi ROS 2 Workspace
 
-本项目是一个基于 **ROS 2 Jazzy** 开发的机器人控制系统，适配 **MentorPi** 硬件架构（树莓派 + RRCLite 主控板）。系统集成了 4 轮电机驱动、2 自由度云台控制、相机推流以及手柄远程控制功能。
-
----
-
-## 1. 系统架构 (System Architecture)
-
-系统采用分层解耦设计，确保硬件更换或功能扩展时只需修改特定模块。
-
-### 1.1 逻辑架构
-
-```mermaid
-graph TD
-    subgraph "输入层 (Input)"
-        Joy[手柄 Joy]
-        App[App/其他控制源]
-    end
-
-    subgraph "逻辑控制层 (Logic)"
-        Teleop[mentorpi_teleop]
-        Vision[mentorpi_vision]
-        SLAM[slam_toolbox]
-    end
-
-    subgraph "核心驱动层 (Drivers)"
-        Base[mentorpi_base]
-        Lidar[oradar_lidar]
-    end
-
-    subgraph "硬件层 (Hardware)"
-        RRCLite[RRCLite STM32]
-        Cam[相机]
-        MS200[MS200 雷达]
-    end
-
-    Joy -->|sensor_msgs/Joy| Teleop
-    App -->|geometry_msgs/Twist| Teleop
-    Teleop -->|/cmd_vel| Base
-    Teleop -->|/gimbal/cmd| Base
-    Base <==>|Serial: 1M| RRCLite
-    RRCLite -->|电机驱动| Motors[4x 编码电机]
-    RRCLite -->|舵机信号| Servos[2x 云台舵机]
-    Cam -->|OpenCV| Vision
-    MS200 -->|Serial: 230.4k| Lidar
-    Lidar -->|/scan| SLAM
-    Base -->|/odom| SLAM
-    SLAM -->|/map| ROS_System[其他感知节点]
-```
-
-- **输入层 (Input)**: 手柄 (Joy)、App 指令、AI 算法逻辑。
-- **控制层 (Control)**: 负责坐标转换、运动学计算（如麦轮模型）及指令下发。
-- **驱动层 (Driver)**: `mentorpi_base` 节点（底盘驱动）与 `oradar_lidar` 节点（雷达驱动）。
-- **硬件层 (Hardware)**: RRCLite (STM32) 驱动电机、舵机；MS200 激光雷达采集环境点云。
-
-### 1.2 软件包说明
-| 软件包 | 类型 | 职责 |
-| :--- | :--- | :--- |
-| `mentorpi_msgs` | ament_cmake | **接口定义**：包含 `Gimbal`（云台）和 `MotorStatus`（电机）自定义消息。 |
-| `mentorpi_base` | ament_python | **底盘驱动**：实现串口通信、麦轮逆运动学解析及 `/odom` 发布。 |
-| `oradar_lidar` | ament_cmake | **雷达驱动**：适配 Oradar MS200 激光雷达，发布 `/scan` 话题。 |
-| `mentorpi_teleop` | ament_python | **远程控制**：映射 Joy 手柄数据到运动和云台话题。 |
-| `mentorpi_vision` | ament_python | **视觉处理**：发布相机图像流，支持后续 AI 视觉扩展。 |
-| `mentorpi_bringup` | ament_python | **系统整合**：包含一键启动的 Launch 文件和全局参数配置。 |
-
+基于 **ROS 2 Jazzy** 的机器人控制系统，适配 MentorPi 硬件（树莓派 5 + RRCLite STM32 麦克纳姆轮底盘 + 2-DOF 云台 + MS200 激光雷达 + Orbbec Gemini 2L 深度相机）。
 
 ---
 
-## 2. 串口通信协议 (Serial Protocol)
+## 快速启动
 
-驱动层与 RRCLite 通信采用以下帧格式：
-- **帧头**: `0xAA 0x55`
-- **校验**: `CRC-8/MAXIM` (Poly: 0x31, Init: 0x00, RefIn: True, RefOut: True)
-- **波特率**: `1,000,000 (1M)`
-- **控制 ID**:
-    - `0x03`: 编码器电机控制（SubCmd 0x01 为多电机控制）。
-    - `0x04`: PWM 舵机控制（SubCmd 0x03 为单个舵机控制）。
+### 编译
 
----
-
-## 3. 快速上手 (Quick Start)
-
-### 3.1 编译
 ```bash
-cd mentorpi_ws
-colcon build --symlink-install
+cd ~/workdir/mentorpi/mentorpi_ws
+source /opt/ros/jazzy/setup.bash
+colcon build
 source install/setup.bash
 ```
 
-### 3.2 运行
-启动所有核心节点（默认使用 USB 相机）：
+### 启动模式
+
+| 模式 | 命令 | 说明 |
+|------|------|------|
+| **基础遥控** | `ros2 launch mentorpi_bringup mentorpi.launch.py` | 底盘 + 手柄 + 2D 激光雷达 + IMU/EKF 融合 |
+| **2D 建图** | `ros2 launch mentorpi_bringup mapping.launch.py` | 基础遥控 + slam_toolbox 2D SLAM |
+| **2D 定位** | `ros2 launch mentorpi_bringup localization.launch.py` | 基础遥控 + 加载已有 2D 地图定位 |
+| **3D 建图** | `ros2 launch mentorpi_bringup rtabmap_mapping.launch.py` | Gemini 2L RGB-D + 视觉惯性里程计 + RTAB-Map 3D SLAM |
+
+### 依赖安装
+
 ```bash
-ros2 launch mentorpi_bringup mentorpi.launch.py
+# 2D SLAM
+sudo apt install ros-jazzy-slam-toolbox ros-jazzy-imu-filter-madgwick ros-jazzy-robot-localization
+
+# 3D SLAM (额外)
+sudo apt install ros-jazzy-rtabmap-ros
+
+# RViz2 IMU 可视化插件 (远程 PC)
+sudo apt install ros-jazzy-rviz-imu-plugin
 ```
 
-若使用 **Orbbec Gemini 2L** 深度相机，请运行：
+---
+
+## 系统架构
+
+### 分层设计
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│ 输入层        joy_node (手柄)  /  App  /  Nav2                  │
+├────────────────────────────────────────────────────────────────┤
+│ 控制层        mentorpi_teleop → /cmd_vel, /gimbal/cmd          │
+├────────────────────────────────────────────────────────────────┤
+│ 感知融合层    IMU Filter (Madgwick) → EKF / 视觉里程计          │
+│               slam_toolbox (2D) / RTAB-Map (3D)                │
+├────────────────────────────────────────────────────────────────┤
+│ 驱动层        mentorpi_base (串口)  oradar_lidar  orbbec_camera│
+├────────────────────────────────────────────────────────────────┤
+│ 硬件层        RRCLite STM32 (电机+舵机+IMU)                    │
+│               MS200 激光雷达  Gemini 2L 深度相机                │
+└────────────────────────────────────────────────────────────────┘
+```
+
+### 2D SLAM 数据流
+
+```
+                    mentorpi.launch.py
+                    ┌──────────────────────────────────────────────┐
+joy_node → teleop → /cmd_vel → base_node ──→ Serial → STM32      │
+                                   │                               │
+                                   ├→ /odom (dead-reckoning)       │
+                                   └→ /imu/data_raw (STM32 IMU)   │
+                                          │                        │
+                                     madgwick                      │
+                                          │                        │
+                                     /imu/data                     │
+                                          │                        │
+                              /odom ──→ EKF ──→ TF: odom→base_link│
+                                               → /odometry/filtered│
+                    └──────────────────────────────────────────────┘
+
+oradar_scan → /scan ──→ slam_toolbox ──→ TF: map→odom
+                                       → /map (OccupancyGrid)
+```
+
+### 3D SLAM 数据流
+
+```
+                    rtabmap_mapping.launch.py
+                    ┌──────────────────────────────────────────────┐
+Gemini 2L ─→ /camera/color/image_raw  ──┐                         │
+           → /camera/depth/image_raw  ───┤→ rgbd_odometry          │
+           → /camera/gyro_accel/sample   │       ↑                 │
+                    │                    │  /camera/imu/data        │
+               madgwick ─────────────────┘  (with orientation)     │
+                                                                   │
+base_node ─→ /odom (备用)  /imu/data_raw (3D模式下未使用)         │
+                    └──────────────────────────────────────────────┘
+
+rgbd_odometry ──→ TF: odom→base_link
+               → rtabmap (SLAM) ──→ TF: map→odom
+                                  → /rtabmap/cloud (3D 点云)
+                                  → /rtabmap/grid_map (2D 栅格)
+```
+
+### TF 树
+
+```
+2D SLAM:   map → odom → base_link → laser_frame
+        (slam_toolbox) (EKF)        (static z=0.18m)
+
+3D SLAM:   map → odom → base_link → camera_link → camera_*_optical_frame
+        (rtabmap) (rgbd_odom)      (static)       (orbbec driver)
+                                   → laser_frame (static z=0.18m)
+```
+
+---
+
+## 软件包
+
+### 自研包
+
+| 包名 | 类型 | 节点 | 职责 |
+|------|------|------|------|
+| `mentorpi_msgs` | ament_cmake | — | 自定义消息：`Gimbal.msg`, `MotorStatus.msg` |
+| `mentorpi_base` | ament_python | `base_node` | 串口通信、麦轮运动学、里程计、IMU 读取 |
+| `mentorpi_teleop` | ament_python | `teleop_node` | 手柄映射（北通 BTP-KP20D） |
+| `mentorpi_vision` | ament_python | `vision_node` | OpenCV 相机图像发布 |
+| `mentorpi_bringup` | ament_python | — | Launch 文件 + 配置文件 |
+| `oradar_lidar` | ament_cmake | `oradar_scan` | MS200 激光雷达驱动 |
+
+### 外部依赖包
+
+| 包名 | 节点 | 用于 | 安装 |
+|------|------|------|------|
+| `slam_toolbox` | `async_slam_toolbox_node` | 2D SLAM | `apt: ros-jazzy-slam-toolbox` |
+| `imu_filter_madgwick` | `imu_filter_madgwick_node` | IMU 姿态估计 | `apt: ros-jazzy-imu-filter-madgwick` |
+| `robot_localization` | `ekf_node` | 多源里程计融合 | `apt: ros-jazzy-robot-localization` |
+| `rtabmap_ros` | `rgbd_odometry`, `rtabmap` | 3D SLAM | `apt: ros-jazzy-rtabmap-ros` |
+| `orbbec_camera` | Gemini 2L 驱动 | 深度相机 | 已预装 |
+
+### Launch 文件
+
+| 文件 | 包含内容 |
+|------|---------|
+| `mentorpi.launch.py` | base_node + STM32 IMU Madgwick + EKF + 相机 + 手柄 + 遥控 + 激光雷达 |
+| `mapping.launch.py` | mentorpi.launch.py + slam_toolbox 2D 建图 |
+| `localization.launch.py` | mentorpi.launch.py + slam_toolbox 定位模式 |
+| `rtabmap_mapping.launch.py` | base_node + Gemini 2L (RGB-D+IMU) + Madgwick + RTAB-Map 3D SLAM |
+
+### 配置文件 (`src/mentorpi_bringup/config/`)
+
+| 文件 | 说明 |
+|------|------|
+| `imu_filter.yaml` | STM32 IMU Madgwick 滤波参数 |
+| `ekf.yaml` | EKF 融合参数（/odom + /imu/data） |
+| `slam_toolbox_params.yaml` | 2D SLAM 建图参数 |
+| `slam_toolbox_localization_params.yaml` | 2D SLAM 定位参数 |
+
+---
+
+## 各模式详细说明
+
+### 基础遥控
+
 ```bash
+ros2 launch mentorpi_bringup mentorpi.launch.py
+# 使用深度相机替代 OpenCV 相机：
 ros2 launch mentorpi_bringup mentorpi.launch.py camera_type:=gemini2l
 ```
 
-## 4. 激光雷达与建图 (Lidar & Mapping)
+手柄操作：
+- **左摇杆**：前后 (ly→linear.x) / 横移 (lx→linear.y)
+- **右摇杆 X**：旋转 (angular.z)
+- **按住 RB + 右摇杆**：云台控制（松开 RB 自动回中）
+- 死区：0.1
 
-### 4.1 激光雷达 (MS200)
-系统默认集成了 **Oradar MS200** 激光雷达。其驱动节点 `oradar_scan` 已包含在 `mentorpi.launch.py` 中。
-- **话题**: `/scan` (sensor_msgs/LaserScan)
-- **坐标系**: `laser_frame`
-- **配置**: 可在 `src/oradar_lidar/launch/ms200_scan.launch.py` 或 `mentorpi_bringup` 中修改串口号及波特率。
+### 2D 建图 (slam_toolbox)
 
-### 4.2 开启 SLAM 建图
-系统内置了 `slam_toolbox` 配置。
-1. 启动建图节点（会自动启动底盘和雷达）：
-   ```bash
-   ros2 launch mentorpi_bringup mapping.launch.py
-   ```
-2. 在远程 PC 上启动 Rviz2 查看地图：
-   ```bash
-   rviz2 -d src/oradar_lidar/rviz2/oradar_scan.rviz
-   ```
-3. 使用手柄控制小车移动以完成地图扫描。
+```bash
+# 启动建图
+ros2 launch mentorpi_bringup mapping.launch.py
+
+# 遥控小车走一圈后保存地图
+mkdir -p ~/maps
+ros2 service call /slam_toolbox/serialize_map \
+  slam_toolbox/srv/SerializePoseGraph \
+  "{filename: '/home/pi/maps/my_room'}"
+```
+
+生成文件：`my_room.posegraph` + `my_room.data`
+
+### 2D 定位 (加载已有地图)
+
+```bash
+# 默认地图
+ros2 launch mentorpi_bringup localization.launch.py
+
+# 指定地图（不含扩展名）
+ros2 launch mentorpi_bringup localization.launch.py map_file:=/home/pi/maps/kitchen
+```
+
+### 3D 建图 (RTAB-Map + Gemini 2L)
+
+```bash
+# 创建地图存储目录
+mkdir -p ~/rtabmap_maps
+
+# 启动 3D 建图
+ros2 launch mentorpi_bringup rtabmap_mapping.launch.py
+
+# 地图自动保存到 ~/rtabmap_maps/rtabmap.db
+# 指定其他路径：
+ros2 launch mentorpi_bringup rtabmap_mapping.launch.py \
+  database_path:=~/rtabmap_maps/kitchen.db
+```
+
+### RViz2 远程可视化
+
+在远程 PC 上：
+
+```bash
+# 建议两端统一使用 Cyclone DDS
+export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+rviz2
+```
+
+**RViz2 配置：**
+
+| 显示项 | 类型 | Topic | 适用模式 |
+|--------|------|-------|----------|
+| 2D 激光 | LaserScan | `/scan` (QoS: Best Effort) | 所有 |
+| 2D 地图 | Map | `/map` | 2D SLAM |
+| 3D 点云 | PointCloud2 | `/rtabmap/cloud` | 3D SLAM |
+| 3D 累积地图 | MapCloud (rtabmap plugin) | `/rtabmap/mapData` | 3D SLAM |
+| 2D 栅格 | Map | `/rtabmap/grid_map` | 3D SLAM |
+| 里程计轨迹 | Odometry | `/odometry/filtered` (2D) 或 `/odom` (3D) | 所有 |
+| IMU 姿态 | Imu (需 rviz-imu-plugin) | `/imu/data` 或 `/camera/imu/data` | 所有 |
+| 坐标系 | TF | — | 所有 |
+
+Fixed Frame 设为 `map`（建图/定位时）或 `odom`（无 SLAM 时）。
 
 ---
 
-## 5. 功能扩展指南 (Extension Guide)
+## 硬件说明
 
-### 5.1 增加 AI 视觉追踪
-1. 创建新包 `mentorpi_ai`。
-2. 订阅 `/camera/image_raw`。
-3. 处理图像后，发布 `Gimbal.msg` 到 `/gimbal/cmd` 话题，实现自动跟随。
+### 串口通信协议
 
-### 5.2 导航与路径规划 (Nav2)
-1. 在 `mentorpi_base` 中解析编码器反馈，发布 `/odom`（里程计）。
-2. 配置 `Nav2` 参数文件。
-3. `Nav2` 输出的 `/cmd_vel` 将直接驱动小车运动。
+帧格式：`[0xAA] [0x55] [Function] [Length] [Data...] [CRC8]`
+
+| 功能码 | 名称 | 方向 | 说明 |
+|--------|------|------|------|
+| 3 | MOTOR | 发送 | 电机速度控制（float32 rps） |
+| 4 | PWM_SERVO | 发送 | 云台舵机（uint16 脉宽 500-2500μs） |
+| 7 | IMU | 接收 | 6×float32：ax,ay,az (g) + gx,gy,gz (deg/s) |
+
+- **设备**：`/dev/ttyACM0` @ 1,000,000 baud
+- **初始化**：`rts=False, dtr=False`，打开后等待 0.5s
+- **电机 ID**：协议 0-indexed（代码中 1-based，发送时减 1）
+- **电机 1,2 取反**（官方 SDK 约定）
+- **IMU 自动上报**，无需使能命令
+
+完整协议见 `docs/hardware_protocol.md`。
+
+### 底盘参数
+
+| 参数 | 值 |
+|------|-----|
+| 前后轴距 (wheelbase) | 0.1368 m |
+| 左右轴距 (track_width) | 0.1410 m |
+| 轮径 (wheel_diameter) | 0.065 m |
+
+### 设备列表
+
+| 设备 | 端口 | 波特率 | 说明 |
+|------|------|--------|------|
+| RRCLite STM32 | `/dev/ttyACM0` | 1,000,000 | 底盘+云台+IMU |
+| MS200 激光雷达 | `/dev/ttyUSB0` | 230,400 | CH340 转换器 |
+| Gemini 2L 深度相机 | USB | — | RGB-D + 内置 IMU |
+| 北通手柄 (BTP-KP20D) | USB 无线 | — | 2.4G dongle |
+
+### 已知问题
+
+- `/dev/ttyACM0` 偶尔重启后消失，重启 Pi 可解决
+- `oradar_scan` 节点 Ctrl+C 可能无法干净退出，用 `pkill -9 -f oradar_scan`
+- 跨网络 RViz2 看不到数据时，两端都设置 `export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp`
+- RTAB-Map 视觉里程计在低纹理环境（白墙、纯色地面）容易丢失
 
 ---
 
-## 6. 开发建议
-- **串口权限**: 若连接失败，请执行 `sudo chmod 666 /dev/ttyUSB0`。
-- **话题调试**: 使用 `ros2 topic list` 和 `ros2 topic echo` 监控实时数据。
-- **波特率**: RRCLite 默认波特率较高（1M），请确保连接线质量。
+## 扩展指南
+
+### 为 3D SLAM 添加轮式里程计备用
+
+视觉里程计在低纹理场景可能丢失，可加 EKF 融合作为备用：
+
+1. 在 `rtabmap_mapping.launch.py` 中添加 `imu_filter_madgwick`（STM32 IMU）+ `ekf_node`
+2. EKF 融合 `/odom` + `/imu/data` → 发布 `odom→base_link` TF
+3. 设置 rgbd_odometry 的 `guess_frame_id: odom`，视觉失败时用轮式猜测顶上
+
+### 接入 Nav2 导航
+
+系统已提供 Nav2 所需的全部输入：
+- **地图**：`/map`（2D）或 `/rtabmap/grid_map`（3D）
+- **定位 TF**：`map → odom → base_link`
+- **避障**：`/scan`（激光雷达）
+- **控制**：Nav2 输出 `/cmd_vel` 直接驱动底盘
+
+### AI 视觉
+
+1. 订阅 `/camera/color/image_raw`（Gemini 2L）或 `/camera/image_raw`（OpenCV）
+2. 处理后发布 `/gimbal/cmd`（`mentorpi_msgs/Gimbal`）实现自动跟随
+3. 或发布 `/cmd_vel` 实现视觉导航
+
+---
+
+## 参考
+
+- **官方 SDK**：`/home/pi/workdir/mentorpi/src/`（协议参考，勿修改）
+- **硬件协议详情**：`docs/hardware_protocol.md`
+- **Claude Code 开发指引**：`CLAUDE.md`
