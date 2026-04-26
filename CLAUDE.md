@@ -63,26 +63,43 @@ joy_node → /joy → teleop_node → /cmd_vel ──→ base_node ─→ Serial
 oradar_scan ─→ /scan (LaserScan) ──→ slam_toolbox ─→ /map + TF: map → odom
 ```
 
-### Mode 2: 3D SLAM (rtabmap_mapping.launch.py)
+### Mode 2: 3D SLAM (rtabmap_mapping.launch.py) — 异构架构
+
+**前端**(高频 dead-reckoning,跟 2D 模式共用同一套)：
 
 ```
-Gemini 2L ─→ /camera/color/image_raw ───┐
-           → /camera/depth/image_raw ────┤→ rgbd_odometry ──→ TF: odom → base_link
-           → /camera/gyro_accel/sample   │        ↑
-                      │                  │   /camera/imu/data
-                 madgwick ───────────────┘   (with orientation)
-                      │
-                      └─→ /camera/imu/data
-
-base_node ─→ /odom (备用，未接入 EKF)
-           → /imu/data_raw (STM32 IMU，3D 模式下未使用)
-
-rgbd_odometry ──→ rtabmap (SLAM) ──→ TF: map → odom
-                                   → /rtabmap/grid_map (2D occupancy)
-                                   → /rtabmap/cloud (3D point cloud)
-
-oradar_scan ─→ /scan (2D 避障用，不参与 3D 建图)
+base_node ─→ /odom (50Hz, cmd_vel 积分) ─────┐
+          ─→ /imu/data_raw (STM32 IMU)       │
+                       │                      │
+                  madgwick ↓                  │
+                  /imu/data (含 orientation)  │
+                       │                      ↓
+                       └────────────→ EKF ←──/odom
+                                       │
+                                       ├─→ TF: odom → base_link (50Hz)
+                                       └─→ /odometry/filtered
 ```
+
+**后端**(低频建图 + 周期性 loop closure)：
+
+```
+Gemini 2L ─→ /camera/color/image_raw ────┐
+           → /camera/depth/image_raw ─────┤→ rtabmap (2Hz) ──→ TF: map → odom
+           → /camera/color/camera_info ───┤    ↑               → /cloud_map (累积点云)
+                                          │    │               → /map (2D 栅格)
+                                          │    │               → /mapData, /mapGraph
+                                          │    └── TF lookup (odom→base_link by EKF)
+                                          │
+oradar_scan ─→ /scan (避障用，不参与 3D 建图)
+```
+
+**关键差别(对比旧的纯视觉里程计设计)：**
+- **没有 `rgbd_odometry`**：机器人位姿来自 EKF 融合的轮速 + STM32 IMU,~20ms 延迟,45Hz
+- **没有相机 IMU**：`enable_accel/gyro: false`,Gemini 2L IMU 不参与
+- **rtabmap 通过 TF 拿位姿**：`subscribe_odom_info: false`,自动从 TF 链 `odom → base_link` 读
+- **轮速里程计漂移由 loop closure 校正**：rtabmap 在 `map → odom` 上发出修正
+
+收益:机器人 pose 延迟从 ~330ms → ~20ms (16x↓),sync 警告消除,视觉里程计永不 fail,CPU 节省约 20pp。
 
 ### TF Trees
 
@@ -92,13 +109,15 @@ map → odom → base_link → laser_frame
 (slam_toolbox) (EKF)     (static, z=0.18m)
 ```
 
-**3D SLAM:**
+**3D SLAM(异构架构):**
 ```
 map → odom → base_link → camera_link → camera_*_optical_frame
-(rtabmap) (rgbd_odom)   (static)      (orbbec driver)
+(rtabmap) (EKF)        (static)        (orbbec driver)
                        → laser_frame
                          (static, z=0.18m)
 ```
+
+**相机-底盘标定**:`base_link → camera_link` 静态 TF 在 `rtabmap_mapping.launch.py` 里手填(默认 x=0.05, z=0.15, 无旋转,**只是估计值,需用尺子量后校准**)。如果相机有俯仰角(如低头看地面),记得填 RPY 的 pitch(弧度制)。
 
 ## Packages
 
@@ -116,9 +135,9 @@ map → odom → base_link → camera_link → camera_*_optical_frame
 | Package | Node | Used in |
 |---------|------|---------|
 | `slam_toolbox` | `async_slam_toolbox_node` / `localization_slam_toolbox_node` | 2D SLAM |
-| `rtabmap_ros` | `rgbd_odometry`, `rtabmap`, `point_cloud_xyzrgb` | 3D SLAM |
+| `rtabmap_ros` | `rtabmap`, `point_cloud_xyzrgb` | 3D SLAM |
 | `imu_filter_madgwick` | `imu_filter_madgwick_node` | Both modes |
-| `robot_localization` | `ekf_node` | 2D SLAM |
+| `robot_localization` | `ekf_node` | Both modes |
 | `orbbec_camera` | `camera` (Gemini 2L driver) | 3D SLAM |
 
 ### Launch Files
@@ -128,14 +147,14 @@ map → odom → base_link → camera_link → camera_*_optical_frame
 | `mentorpi.launch.py` | Base hardware: base_node + STM32 IMU Madgwick + EKF + camera + joy + teleop + lidar |
 | `mapping.launch.py` | = mentorpi.launch.py + slam_toolbox (2D mapping) |
 | `localization.launch.py` | = mentorpi.launch.py + slam_toolbox localization mode |
-| `rtabmap_mapping.launch.py` | Standalone: base_node + Gemini 2L (RGB-D+IMU) + Madgwick + RTAB-Map (3D SLAM) |
+| `rtabmap_mapping.launch.py` | Standalone: base_node + STM32 IMU Madgwick + EKF + Gemini 2L (RGB-D only) + RTAB-Map (3D SLAM, 异构架构) |
 
 ### Config Files (`src/mentorpi_bringup/config/`)
 
 | File | Description |
 |------|-------------|
-| `imu_filter.yaml` | Madgwick filter for STM32 IMU (2D mode) |
-| `ekf.yaml` | robot_localization EKF: fuses /odom + /imu/data (2D mode) |
+| `imu_filter.yaml` | Madgwick filter for STM32 IMU (both 2D and 3D modes) |
+| `ekf.yaml` | robot_localization EKF: fuses /odom + /imu/data (both 2D and 3D modes) |
 | `slam_toolbox_params.yaml` | slam_toolbox mapping config |
 | `slam_toolbox_localization_params.yaml` | slam_toolbox localization config |
 
@@ -166,7 +185,7 @@ map → odom → base_link → camera_link → camera_*_optical_frame
 
 ## IMU Data Flow
 
-### STM32 IMU (2D SLAM mode)
+两种模式都使用 STM32 IMU 经过 Madgwick + EKF 融合,Gemini 2L 自带 IMU 不参与 SLAM。
 
 ```
 STM32 (Function=7, 6×float32: ax,ay,az,gx,gy,gz)
@@ -174,18 +193,10 @@ STM32 (Function=7, 6×float32: ax,ay,az,gx,gy,gz)
   → /imu/data_raw (accel: g→m/s², gyro: deg/s→rad/s, no orientation)
   → imu_filter_madgwick
   → /imu/data (with orientation quaternion)
-  → EKF (fuses with /odom → odom→base_link TF)
+  → EKF (fuses with /odom → /odometry/filtered + TF odom→base_link)
 ```
 
-### Gemini 2L IMU (3D SLAM mode)
-
-```
-Gemini 2L hardware IMU
-  → /camera/gyro_accel/sample (raw accel + gyro, no orientation)
-  → imu_filter_madgwick (camera_imu_filter)
-  → /camera/imu/data (with orientation quaternion)
-  → rgbd_odometry (visual-inertial odometry)
-```
+3D 模式下 Gemini 2L 的 IMU 流通过 launch 参数关掉(`enable_accel/gyro: false`),节省 USB 带宽和 CPU。
 
 ## Hardware Serial Protocol
 
@@ -244,9 +255,10 @@ ros2 launch mentorpi_bringup localization.launch.py map_file:=/home/pi/maps/kitc
 
 ## 3D SLAM (RTAB-Map + Gemini 2L)
 
-- **Packages:** `rtabmap_ros`, `orbbec_camera` (install: `sudo apt install ros-jazzy-rtabmap-ros`)
-- **Odometry:** Visual-inertial (rgbd_odometry + Gemini 2L IMU via Madgwick)
-- **No EKF / No wheel odometry** — pure visual SLAM
+- **Packages:** `rtabmap_ros`, `orbbec_camera`, `robot_localization` (install: `sudo apt install ros-jazzy-rtabmap-ros ros-jazzy-robot-localization`)
+- **架构:** 异构(heterogeneous) — 前端 EKF (轮速+IMU) 出 odom,后端 rtabmap 仅做 mapping + loop closure
+- **Odometry source:** EKF (`/odometry/filtered` @ 45Hz, ~20ms 延迟)
+- **不再使用 rgbd_odometry**:rtabmap 通过 TF 链 `odom→base_link` 拿位姿(`subscribe_odom_info: false`)
 
 ### Mapping (建图)
 
@@ -256,19 +268,52 @@ ros2 launch mentorpi_bringup rtabmap_mapping.launch.py
 # 遥控机器人走一圈，地图自动保存到 ~/rtabmap_maps/rtabmap.db
 ```
 
-### RTAB-Map Tuning Notes
+**注意:** 切换架构或频繁中断后 `rtabmap.db` 可能积累 word reference 错位(`addWordRef() Not found word`)。出现这类报错时备份并重建:
+```bash
+mv ~/rtabmap_maps/rtabmap.db ~/rtabmap_maps/rtabmap.db.bak
+```
 
-Key parameters in `rtabmap_mapping.launch.py` (rgbd_odometry node):
+### Performance Tuning (Pi 5 实测)
+
+经过下面这些优化,新架构在 Pi 5 上可达:**机器人 pose 延迟 ~20ms / 45Hz**,rtabmap 建图 2Hz,核心 CPU 占用约 75%(4 核共 400%)。
+
+`launch_arguments` 给 gemini2L launch:
 
 | Param | Value | Notes |
 |-------|-------|-------|
-| `Vis/MinInliers` | 10 | Default 20. Lowered to reduce "Not enough inliers" failures |
-| `Vis/MaxFeatures` | 700 | More features = more matching candidates |
-| `Vis/InlierDistance` | 0.1 | Relaxed inlier distance threshold |
-| `Odom/ResetCountdown` | 5 | Allow 5 consecutive failures before odometry reset |
-| `wait_imu_to_init` | true | Wait for IMU gravity alignment before starting |
+| `color_width/height/fps` | `640/480/15` | 30→15 fps 大幅降低 USB+driver CPU,延迟变化不大 |
+| `depth_width/height/fps` | `640/400/15` | 同上 |
+| `color_format` | `MJPG` | YUYV 在 Pi 5 上无收益(SDK 转换跟解 MJPG 同等开销) |
+| `enable_accel/gyro` | `false` | 异构架构不用相机 IMU |
+| `enable_sync_output_accel_gyro` | `false` | 同上 |
+| `enable_colored_point_cloud` | `false` | driver 端的彩色点云生成,改用独立 `point_cloud_xyzrgb` 节点 |
+| `depth_registration` | `true` | HW D2C 对齐(`align_mode=HW`),ASIC 内做,host CPU 不参与 |
 
-**Environment requirements:** RTAB-Map needs visual features. Avoid pointing camera at blank walls, uniform surfaces, or very dark areas. Best results with textured environments (furniture, bookshelves, patterned floors).
+`point_cloud_xyzrgb` 节点参数:
+
+| Param | Value | Notes |
+|-------|-------|-------|
+| `decimation` | `8` | 降采样,RViz 可视化点云密度足够 |
+| `voxel_size` | `0.10` | 同上 |
+
+rtabmap 节点参数:
+
+| Param | Value | Notes |
+|-------|-------|-------|
+| `subscribe_odom_info` | `false` | 没有 rgbd_odometry,通过 TF 拿 odom |
+| `topic_queue_size` / `sync_queue_size` | `20` | 输入 15Hz vs 检测 2Hz,需要队列消化 |
+| `Rtabmap/DetectionRate` | `2.0` | Hz, Pi 5 friendly |
+| `Kp/MaxFeatures` | `300` | loop closure 用 |
+| `RGBD/OptimizeMaxError` | `3.0` | |
+
+**Environment requirements:** RTAB-Map loop closure 仍依赖视觉特征。空白墙、暗光、低纹理环境下 loop closure 检测失败,机器人位姿改靠纯 dead-reckoning(轮速+IMU),漂移会累积直到下次回到有特征的区域触发 loop closure 校正。
+
+**Avoid `Rtabmap/CreateIntermediateNodes=true`** — triggers `Memory.cpp:3473::addLink() Condition (fromS->getWeight() >= 0 && toS->getWeight() >=0) not met` FATAL crash on rtabmap startup. Leave it at the default (false).
+
+**Gemini 2L USB requirements:**
+- Must use USB 3.0 port (blue, 5000M) and USB-C 3.0 cable. USB 2.0 (480M) produces `color frame is not decoded` errors and disconnects within 1 second.
+- Pi 5 needs `PSU_MAX_CURRENT=5000` in EEPROM (`sudo rpi-eeprom-config --edit`) and `usb_max_current_enable=1` in `/boot/firmware/config.txt` to prevent voltage-drop-induced USB resets when the IR projector kicks in.
+- If camera fails to initialize (`uvc_open -6`), try `usbreset 2bc5:0670`. Stale `component_container` processes from a previous launch can also hold the device — check with `ps -ef | grep component_container`.
 
 ### RViz2 Visualization
 
@@ -281,37 +326,35 @@ rviz2
 - **3D Point Cloud:** Add → PointCloud2 → `/rtabmap/cloud`
 - **2D Grid Map:** Add → Map → `/rtabmap/grid_map`
 - **Accumulated 3D Map:** Add → MapCloud (rtabmap_rviz_plugins) → `/rtabmap/mapData`
-- **IMU Orientation:** Install `ros-jazzy-rviz-imu-plugin`, Add → Imu → `/camera/imu/data`
+- **IMU Orientation:** Install `ros-jazzy-rviz-imu-plugin`, Add → Imu → `/imu/data`(Madgwick 滤波后)
 - **Fixed Frame:** `map`
 
 ### Static TF Configuration
 
-| Parent | Child | Translation | Notes |
-|--------|-------|-------------|-------|
-| `base_link` | `camera_link` | x=0.05, z=0.15 | Camera mount position (adjust to actual) |
-| `base_link` | `laser_frame` | z=0.18 | Lidar mount height |
+| Parent | Child | Translation (m) | Rotation (rad, ZYX) | Notes |
+|--------|-------|-----------------|---------------------|-------|
+| `base_link` | `camera_link` | x=0.05, z=0.15 | 0 0 0 (yaw pitch roll) | **占位估计值,需用尺子量后改** — 平移误差 → 点云整体偏移;旋转误差 → 点云累积"分层"伪影 |
+| `base_link` | `laser_frame` | z=0.18 | 0 0 0 | Lidar mount 高度 |
+
+如果相机有俯仰角(常见,如低头看地面),`base_to_camera` 的 pitch 字段填弧度制(`10° ≈ 0.1745`)。
 
 ## Extending the System
-
-### Adding wheel odometry to 3D SLAM
-
-If visual odometry fails in low-texture environments, add EKF fusion:
-
-1. Add `imu_filter_madgwick` for STM32 IMU → `/imu/data`
-2. Add `ekf_node` fusing `/odom` + `/imu/data` → `/odometry/filtered`
-3. Set rgbd_odometry `guess_frame_id: odom` to use wheel odom as initial guess
 
 ### Adding navigation (Nav2)
 
 The system provides all inputs Nav2 needs:
 - `/map` or `/rtabmap/grid_map` — costmap source
-- `odom → base_link` TF — robot localization
+- `odom → base_link` TF — robot localization (EKF)
 - `/scan` — obstacle detection
 - `/cmd_vel` — velocity commands
 
 ### Switching between 2D and 3D modes
 
-The two modes are independent launch files sharing the same hardware base. They should not run simultaneously (both publish `odom → base_link` TF).
+The two modes are independent launch files sharing the same EKF-based frontend (base_node + STM32 IMU madgwick + ekf_node). They should not run simultaneously — both publish `odom → base_link` TF (from EKF) and `map → odom` TF (slam_toolbox vs rtabmap), which would conflict.
+
+主要差别:
+- **2D 模式**:lidar `/scan` → slam_toolbox 出 `map → odom`
+- **3D 模式**:Gemini 2L RGB-D → rtabmap 出 `map → odom` + 累积彩色点云
 
 ## Reference Code
 

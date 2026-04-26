@@ -22,23 +22,26 @@ def generate_launch_description():
     localization = LaunchConfiguration('localization')
     database_path = LaunchConfiguration('database_path')
 
-    # Shared RTAB-Map parameters
+    # 异构架构：odom 由底盘 EKF 提供（高频低延迟），
+    # rtabmap 仅做 mapping + loop closure（低频）
     rtabmap_params = {
         'frame_id': 'base_link',
         'odom_frame_id': 'odom',
         'subscribe_depth': True,
         'subscribe_rgb': True,
+        'subscribe_odom_info': False,    # no rgbd_odometry
         'approx_sync': True,
-        'queue_size': 10,
+        'topic_queue_size': 20,
+        'sync_queue_size': 20,
     }
 
     return LaunchDescription([
         localization_arg,
         database_path_arg,
 
-        # --- Hardware ---
+        # ───── 底盘 + 里程计前端（高频 dead-reckoning） ─────
 
-        # 1. 串口驱动 (Base) — 轮式里程计发布 /odom，不发TF
+        # 1. 串口驱动 (Base) — /odom 50Hz + /imu/data_raw
         Node(
             package='mentorpi_base',
             executable='base_node',
@@ -46,12 +49,36 @@ def generate_launch_description():
             parameters=[{
                 'port': '/dev/ttyACM0',
                 'baudrate': 1000000,
-                'publish_odom_tf': False,
+                'publish_odom_tf': False,   # TF 由 EKF 发
             }],
             output='screen'
         ),
 
-        # 2. Gemini 2L 深度相机 (RGB-D + IMU)
+        # 1b. STM32 IMU 滤波 (Madgwick) — /imu/data_raw → /imu/data
+        Node(
+            package='imu_filter_madgwick',
+            executable='imu_filter_madgwick_node',
+            name='imu_filter_madgwick_node',
+            parameters=[
+                os.path.join(bringup_dir, 'config', 'imu_filter.yaml')
+            ],
+            output='screen',
+        ),
+
+        # 1c. EKF — /odom + /imu/data → /odometry/filtered + TF odom→base_link
+        Node(
+            package='robot_localization',
+            executable='ekf_node',
+            name='ekf_filter_node',
+            parameters=[
+                os.path.join(bringup_dir, 'config', 'ekf.yaml')
+            ],
+            output='screen',
+        ),
+
+        # ───── 相机（仅 RGB-D，IMU 不需要） ─────
+
+        # 2. Gemini 2L
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(
                 os.path.join(orbbec_dir, 'launch', 'gemini2L.launch.py')
@@ -59,68 +86,44 @@ def generate_launch_description():
             launch_arguments={
                 'color_width': '640',
                 'color_height': '480',
-                'color_fps': '30',
+                'color_fps': '15',
                 'color_format': 'MJPG',
                 'depth_width': '640',
                 'depth_height': '400',
-                'depth_fps': '30',
+                'depth_fps': '15',
                 'depth_registration': 'true',
-                'enable_accel': 'true',
-                'enable_gyro': 'true',
-                'enable_sync_output_accel_gyro': 'true',
-                'enable_colored_point_cloud': 'true',
+                'enable_accel': 'false',
+                'enable_gyro': 'false',
+                'enable_sync_output_accel_gyro': 'false',
+                'enable_colored_point_cloud': 'false',
             }.items(),
         ),
 
-        # 2b. IMU 滤波 (Madgwick) — 给 Gemini IMU 补上 orientation
-        Node(
-            package='imu_filter_madgwick',
-            executable='imu_filter_madgwick_node',
-            name='camera_imu_filter',
-            output='screen',
-            parameters=[{
-                'use_mag': False,
-                'publish_tf': False,
-                'world_frame': 'enu',
-                'gain': 0.1,
-                'frequency': 100.0,
-            }],
-            remappings=[
-                ('/imu/data_raw', '/camera/gyro_accel/sample'),
-                ('/imu/data', '/camera/imu/data'),
-            ],
-        ),
+        # ───── 遥控 ─────
 
-        # 3. 手柄 + 遥控
-        Node(
-            package='joy',
-            executable='joy_node',
-            name='joy_node',
-            output='screen'
-        ),
-        Node(
-            package='mentorpi_teleop',
-            executable='teleop_node',
-            name='mentorpi_teleop',
-            output='screen'
-        ),
+        Node(package='joy', executable='joy_node', name='joy_node', output='screen'),
+        Node(package='mentorpi_teleop', executable='teleop_node',
+             name='mentorpi_teleop', output='screen'),
 
-        # 4. TF: base_link → camera_link (相机安装位置，根据实际调整)
-        #    x=前方0.05m, y=0, z=高0.15m, 无旋转
+        # ───── 静态 TF ─────
+
+        # base_link → camera_link (前 0.05m, 高 0.15m)
         Node(
             package='tf2_ros',
             executable='static_transform_publisher',
             name='base_to_camera',
             arguments=['0.05', '0', '0.15', '0', '0', '0', 'base_link', 'camera_link'],
         ),
-
-        # 5. TF: base_link → laser_frame
+        # base_link → laser_frame (高 0.18m)
         Node(
             package='tf2_ros',
             executable='static_transform_publisher',
             name='base_to_laser',
             arguments=['0', '0', '0.18', '0', '0', '0', 'base_link', 'laser_frame'],
         ),
+
+        # ───── 激光雷达（仅避障/可视化，不参与 3D 建图） ─────
+
         Node(
             package='oradar_lidar',
             executable='oradar_scan',
@@ -141,34 +144,8 @@ def generate_launch_description():
             ],
         ),
 
-        # --- RTAB-Map ---
+        # ───── RTAB-Map 后端（mapping + loop closure，1-2Hz） ─────
 
-        # 5. Visual Odometry (RGB-D odometry)
-        Node(
-            package='rtabmap_odom',
-            executable='rgbd_odometry',
-            name='rgbd_odometry',
-            output='screen',
-            parameters=[{
-                **rtabmap_params,
-                'publish_tf': True,          # odom → base_link
-                'wait_imu_to_init': True,     # 等 IMU 初始化后再开始
-                'Odom/Strategy': '0',         # 0=Frame-to-Map (more robust)
-                'Vis/MinInliers': '10',       # 默认20，降低以减少匹配失败
-                'Vis/MaxFeatures': '700',     # 多提特征，增加匹配成功率
-                'Vis/InlierDistance': '0.1',  # 放宽 inlier 距离阈值
-                'Odom/ResetCountdown': '5',   # 连续失败5帧才 reset
-                'Odom/GuessSmoothingDelay': '0.5',
-            }],
-            remappings=[
-                ('rgb/image', '/camera/color/image_raw'),
-                ('rgb/camera_info', '/camera/color/camera_info'),
-                ('depth/image', '/camera/depth/image_raw'),
-                ('imu', '/camera/imu/data'),
-            ],
-        ),
-
-        # 6. RTAB-Map SLAM
         Node(
             package='rtabmap_slam',
             executable='rtabmap',
@@ -177,7 +154,7 @@ def generate_launch_description():
             parameters=[{
                 **rtabmap_params,
                 'database_path': database_path,
-                'Mem/IncrementalMemory': 'true',   # mapping mode
+                'Mem/IncrementalMemory': 'true',
                 'Mem/InitWMWithAllNodes': 'false',
                 # 3D map
                 'Grid/FromDepth': 'true',
@@ -187,20 +164,19 @@ def generate_launch_description():
                 'Grid/3D': 'true',
                 'GridGlobal/MinSize': '20.0',
                 # Loop closure
-                'Rtabmap/DetectionRate': '2.0',       # Hz, Pi 5 friendly
+                'Rtabmap/DetectionRate': '2.0',
                 'RGBD/OptimizeMaxError': '3.0',
                 'Kp/MaxFeatures': '300',
-                # Visualization
-                'Rtabmap/CreateIntermediateNodes': 'true',
             }],
             remappings=[
                 ('rgb/image', '/camera/color/image_raw'),
                 ('rgb/camera_info', '/camera/color/camera_info'),
                 ('depth/image', '/camera/depth/image_raw'),
+                ('odom', '/odometry/filtered'),
             ],
         ),
 
-        # 7. 点云发布 (用于 RViz2 实时可视化)
+        # 点云发布 (RViz2 可视化)
         Node(
             package='rtabmap_util',
             executable='point_cloud_xyzrgb',
@@ -208,8 +184,8 @@ def generate_launch_description():
             output='screen',
             parameters=[{
                 'approx_sync': True,
-                'decimation': 4,        # 降采样，减轻 Pi 5 负担
-                'voxel_size': 0.05,
+                'decimation': 8,
+                'voxel_size': 0.10,
                 'max_depth': 5.0,
             }],
             remappings=[

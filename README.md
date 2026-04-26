@@ -87,19 +87,23 @@ oradar_scan → /scan ──→ slam_toolbox ──→ TF: map→odom
                     rtabmap_mapping.launch.py
                     ┌──────────────────────────────────────────────┐
 Gemini 2L ─→ /camera/color/image_raw  ──┐                         │
-           → /camera/depth/image_raw  ───┤→ rgbd_odometry          │
+           → /camera/depth/image_raw  ───┤→ rgbd_odometry → /odom  │
            → /camera/gyro_accel/sample   │       ↑                 │
                     │                    │  /camera/imu/data        │
                madgwick ─────────────────┘  (with orientation)     │
                                                                    │
-base_node ─→ /odom (备用)  /imu/data_raw (3D模式下未使用)         │
+base_node ─→ /wheel_odom (重映射，备用，不参与 3D SLAM)            │
                     └──────────────────────────────────────────────┘
 
 rgbd_odometry ──→ TF: odom→base_link
                → rtabmap (SLAM) ──→ TF: map→odom
-                                  → /rtabmap/cloud (3D 点云)
-                                  → /rtabmap/grid_map (2D 栅格)
+                                  → /cloud_map (累积 3D 彩色点云)
+                                  → /rtabmap/cloud (当前帧点云)
+                                  → /map (2D 栅格)
+                                  → /mapData, /mapGraph (RViz 插件用)
 ```
+
+> **注意**：3D 模式下 base_node 的 `/odom` 被重映射到 `/wheel_odom`，避免与 `rgbd_odometry` 的视觉里程计产生 publisher 冲突。
 
 ### TF 树
 
@@ -228,10 +232,11 @@ rviz2
 | 显示项 | 类型 | Topic | 适用模式 |
 |--------|------|-------|----------|
 | 2D 激光 | LaserScan | `/scan` (QoS: Best Effort) | 所有 |
-| 2D 地图 | Map | `/map` | 2D SLAM |
-| 3D 点云 | PointCloud2 | `/rtabmap/cloud` | 3D SLAM |
-| 3D 累积地图 | MapCloud (rtabmap plugin) | `/rtabmap/mapData` | 3D SLAM |
-| 2D 栅格 | Map | `/rtabmap/grid_map` | 3D SLAM |
+| 2D 地图 | Map | `/map` | 所有 SLAM |
+| 当前帧 3D 点云 | PointCloud2 | `/rtabmap/cloud` | 3D SLAM |
+| **累积 3D 彩色地图** | PointCloud2 | `/cloud_map` | 3D SLAM |
+| 3D 累积地图（插件） | MapCloud (rtabmap plugin) | `/mapData` | 3D SLAM |
+| 位姿图 | MapGraph (rtabmap plugin) | `/mapGraph` | 3D SLAM |
 | 里程计轨迹 | Odometry | `/odometry/filtered` (2D) 或 `/odom` (3D) | 所有 |
 | IMU 姿态 | Imu (需 rviz-imu-plugin) | `/imu/data` 或 `/camera/imu/data` | 所有 |
 | 坐标系 | TF | — | 所有 |
@@ -283,6 +288,32 @@ Fixed Frame 设为 `map`（建图/定位时）或 `odom`（无 SLAM 时）。
 - `oradar_scan` 节点 Ctrl+C 可能无法干净退出，用 `pkill -9 -f oradar_scan`
 - 跨网络 RViz2 看不到数据时，两端都设置 `export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp`
 - RTAB-Map 视觉里程计在低纹理环境（白墙、纯色地面）容易丢失
+- Gemini 2L **必须插 USB 3.0 蓝口** + USB-C 3.0 线，USB 2.0 会导致 `color frame is not decoded` 和频繁断连
+- 重复启动 launch 后，老进程可能残留持有 USB 设备导致相机初始化失败；用 `usbreset 2bc5:0670` 重置相机
+
+### Gemini 2L 稳定性配置
+
+Pi 5 高负载时 USB 控制器对电压敏感，Gemini 2L 的 IR 投射器上电瞬态容易导致掉线。建议：
+
+1. **EEPROM 允许 5A 输出**
+   ```bash
+   sudo rpi-eeprom-config --edit
+   # 加一行：
+   PSU_MAX_CURRENT=5000
+   ```
+
+2. **解除 USB 限流**：`/boot/firmware/config.txt` 加
+   ```
+   usb_max_current_enable=1
+   ```
+
+3. **必须用官方 27W 电源 + 原装 USB-C 3.0 线**。
+
+4. 重启后验证：
+   ```bash
+   lsusb -t | grep uvcvideo   # 应看到 5000M，不是 480M
+   vcgencmd get_config usb_max_current_enable   # 应返回 1
+   ```
 
 ---
 
