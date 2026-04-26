@@ -198,6 +198,12 @@ STM32 (Function=7, 6×float32: ax,ay,az,gx,gy,gz)
 
 3D 模式下 Gemini 2L 的 IMU 流通过 launch 参数关掉(`enable_accel/gyro: false`),节省 USB 带宽和 CPU。
 
+## Calibration
+
+TF tree calibration plan (3 parts: wheel odometry → IMU → camera) documented in `docs/calibration.md`. Status: **TODO, not yet started**. Part 3 (camera extrinsic) will use AprilTag method + a self-developed calibration tool.
+
+Known issue documented there: `mentorpi.launch.py` is missing the `base_link → imu_link` static TF (IMU msg uses `frame_id='imu_link'` but no publisher exists). Must be fixed during Part 2.
+
 ## Hardware Serial Protocol
 
 Full protocol documented in `docs/hardware_protocol.md`. Critical details:
