@@ -129,9 +129,9 @@ dyaw = wz * dt
 ```
 
 - **无编码器反馈**：STM32 协议未实现电机状态回传，官方 SDK 同样使用指令积分
-- **漂移补偿**：2D 模式依赖 EKF + slam_toolbox 校正；3D 模式依赖视觉里程计
+- **漂移补偿**：2D/3D 模式都先用 EKF（轮速+STM32 IMU）融合，再由 SLAM（slam_toolbox 或 rtabmap loop closure）校正 `map → odom`
 - **协方差**：静止时设为 1e-9，运动时设为 1e-3
-- **odom→base_link TF**：参数 `publish_odom_tf` 控制（默认 False，由 EKF 或 rgbd_odometry 接管）
+- **odom→base_link TF**：参数 `publish_odom_tf` 控制（默认 False，由 EKF 接管发布）
 
 ---
 
