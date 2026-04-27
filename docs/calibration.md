@@ -41,27 +41,66 @@ track_width  = 0.1410   # 左右轴距 (m)
 wheel_diameter = 0.065  # 轮径 (m)
 ```
 
+### 工具：`scripts/odom_calib.py`
+
+为了避免每次手动从 `ros2 topic echo` 里读数，仓库自带了一个小工具，订阅 **`/odom` topic**（base_node 直接发的纯 dead-reckoning，**不经过 EKF**，因此不被 IMU 污染），按 Enter 报告自上次原点至今的位移和转角，并自动重置原点。
+
+```bash
+# 终端 A: 起机器人 (任意 launch 都行，只要 base_node 在跑)
+ros2 launch mentorpi_bringup mentorpi.launch.py
+
+# 终端 B: 起标定工具 (注意必须用系统 Python 3.12，不能用 conda)
+/usr/bin/python3.12 scripts/odom_calib.py
+```
+
+输出示例：
+```
+[ready] origin locked: x=+0.0012 y=-0.0003 yaw=+0.05°
+[01] dx=+2.987m  dy=+0.014m  dist=2.987m  dyaw=+0.412°  (raw rad=+0.00719)
+```
+
+交互：`<Enter>` 报告并重置原点；`r<Enter>` 只重置不报告；`q<Enter>` 退出。
+
 ### Step 1.1 — 直行标定 `wheel_diameter`
 
 地上贴 5 米卷尺，机器人正向匀速跑 3 米。
 
-```bash
-ros2 topic echo /odom --field pose.pose.position.x
-```
+操作：
+1. 把车后轮贴在卷尺 0 米处对齐
+2. 终端 B `odom_calib.py` 起来后会显示 `[ready] origin locked`
+3. **按一次 Enter** 把当前位置锁为原点（消除工具启动时的微小漂移）
+4. 手柄推车直行 3 米左右，**停稳**
+5. 再按一次 Enter，工具报告 `dist = d`
+6. 卷尺量实际值 `D`
+7. `wheel_diameter_new = wheel_diameter_old × D / d`
 
-- 实际走 D 米，odom 报 d 米
-- `wheel_diameter_new = wheel_diameter_old × D / d`
-- 重复 3 次取平均，反向再跑 3 次确认对称性
+重复 3 次取平均，反向再跑 3 次确认对称性。
 
 ### Step 1.2 — 原地旋转标定 `wheelbase + track_width`
 
+> ⚠️ 必须先做完 Step 1.1。轮径未标准前转角误差会同时受 `wheel_diameter` 和 `wheelbase+track_width` 影响，无法单独区分。
+
 mecanum 车原地转向时，`wheelbase + track_width` 的和决定角速度比例（见 base_node.py:285 的 `vp = wz * (wheelbase + track_width) / 2.0`）。
 
-操作：
+操作（推荐用单段 90°，避开 ±180° 归一化问题）：
 1. 地上贴参考线，机器人对齐
-2. 发指令 `wz = 0.5 rad/s` 持续 25.13 秒（理论转 720°）
-3. 量实际转角 θ（激光在墙上投点 / 手机量角器 app）
-4. `(wheelbase + track_width)_new = (wheelbase + track_width)_old × 720° / θ`
+2. 发指令 `wz = 0.3 rad/s` 持续约 5.24 秒（理论转 90°）：
+   ```bash
+   timeout 5.24 ros2 topic pub -r 20 /cmd_vel geometry_msgs/Twist '{angular: {z: 0.3}}'
+   ```
+3. 标定工具按 Enter 读 `dyaw` —— odom 报告的转角（记为 `ω`，本质上等于命令积分 `wz × t`）
+4. 用激光在墙上投点 / 手机量角器 app 量物理实际转角（记为 `θ`）
+5. `(wheelbase + track_width)_new = (wheelbase + track_width)_old × ω / θ`
+
+推导：
+```
+base_node 输出的 wheel_speed = wz_cmd × (W+T)_old / 2
+物理 ω_real = 2 × wheel_speed / (W+T)_phys = wz_cmd × (W+T)_old / (W+T)_phys
+→ θ_real = ω_odom × (W+T)_old / (W+T)_phys
+→ (W+T)_phys = (W+T)_old × ω_odom / θ_real
+```
+
+> `odom_calib.py` 的 `dyaw` 归一化到 ±180°。要转大角度做平均，分段按 Enter 累加各段 dyaw。
 
 ### Step 1.3 — UMBmark（区分左右轮直径不对称）
 

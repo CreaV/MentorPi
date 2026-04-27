@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 顶层入口：仅 mecanum 变体（acker 已删除）。 -->
+<robot name="mentorpi" xmlns:xacro="http://ros.org/wiki/xacro">
+    <xacro:include filename="$(find mentorpi_description)/urdf/mecanum.xacro"/>
+</robot>

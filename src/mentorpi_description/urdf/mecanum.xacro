@@ -1,0 +1,161 @@
+<?xml version="1.0" ?>
+<!--
+  MentorPi mecanum body — geometry source-of-truth for sim and real robot.
+
+  IMPORTANT: 轮位置必须与 src/mentorpi_base/mentorpi_base/base_node.py:281-283
+  保持一致。当前值 (wheelbase=0.1368, track_width=0.1410) 是占位估计。
+  Part 1 标定完成后，需同时更新此处与 base_node.py。
+
+  TF root: base_footprint (REP-105 地面投影) → base_link (底盘几何中心)
+  Camera optical frames 与 Orbbec 驱动发布的 frame 名一致；真机加载 URDF 时，
+  让 Orbbec 驱动的 publish_tf=false 以避免 TF 冲突。
+-->
+<robot name="mentorpi_mecanum" xmlns:xacro="http://ros.org/wiki/xacro">
+
+  <!-- ===== 几何参数（与 base_node.py 同步） ===== -->
+  <xacro:property name="wheelbase"     value="0.1368"/>
+  <xacro:property name="track_width"   value="0.1410"/>
+  <xacro:property name="wheel_diameter" value="0.065"/>
+  <xacro:property name="wheel_radius"  value="${wheel_diameter/2}"/>
+  <xacro:property name="x_off"         value="${wheelbase/2}"/>     <!-- 0.0684 -->
+  <xacro:property name="y_off"         value="${track_width/2}"/>   <!-- 0.0705 -->
+  <xacro:property name="wheel_z"       value="-0.018408"/>          <!-- 轮心相对 base_link 的 z（CAD 值） -->
+  <xacro:property name="base_z"        value="0.0505"/>             <!-- base_footprint → base_link，由 wheel_z + wheel_radius 推 -->
+
+  <xacro:property name="PI" value="3.1415926535897931"/>
+
+  <material name="black"><color rgba="0 0 0 1"/></material>
+  <material name="white"><color rgba="1 1 1 1"/></material>
+
+  <!-- ===== Root: base_footprint (REP-105) ===== -->
+  <link name="base_footprint"/>
+
+  <joint name="base_footprint_to_base_link" type="fixed">
+    <parent link="base_footprint"/>
+    <child link="base_link"/>
+    <origin xyz="0 0 ${base_z}" rpy="0 0 0"/>
+  </joint>
+
+  <link name="base_link">
+    <inertial>
+      <origin rpy="0 0 0" xyz="7.82634169708696E-05 3.66518389137982E-05 0.0068167426737893"/>
+      <mass value="0.080358044299185"/>
+      <inertia ixx="9.92047502462735E-05" ixy="3.20099144678921E-08" ixz="1.15869166655817E-05"
+               iyy="0.000292461515602123" iyz="-2.92890751882614E-08" izz="0.000367604260834833"/>
+    </inertial>
+    <visual>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry><mesh filename="package://mentorpi_description/meshes/mecanum/base_link.STL"/></geometry>
+      <material name="white"/>
+    </visual>
+    <collision>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry><mesh filename="package://mentorpi_description/meshes/mecanum/base_link.STL"/></geometry>
+    </collision>
+  </link>
+
+  <!-- ===== Wheels: 4× continuous joint ===== -->
+  <xacro:macro name="mecanum_wheel" params="prefix x y mesh">
+    <link name="wheel_${prefix}_Link">
+      <inertial>
+        <origin rpy="0 0 0" xyz="0 0 0"/>
+        <mass value="0.0378743634664218"/>
+        <inertia ixx="3.67678518315829E-06" ixy="0" ixz="0"
+                 iyy="5.81008995754212E-06" iyz="0" izz="3.67939460898329E-06"/>
+      </inertial>
+      <visual>
+        <origin rpy="0 0 0" xyz="0 0 0"/>
+        <geometry><mesh filename="package://mentorpi_description/meshes/mecanum/${mesh}"/></geometry>
+        <material name="white"/>
+      </visual>
+      <collision>
+        <origin rpy="0 0 0" xyz="0 0 0"/>
+        <geometry><mesh filename="package://mentorpi_description/meshes/mecanum/${mesh}"/></geometry>
+      </collision>
+    </link>
+    <joint name="wheel_${prefix}_Joint" type="continuous">
+      <origin rpy="0 0 0" xyz="${x} ${y} ${wheel_z}"/>
+      <parent link="base_link"/>
+      <child link="wheel_${prefix}_Link"/>
+      <axis xyz="0 1 0"/>
+    </joint>
+  </xacro:macro>
+
+  <xacro:mecanum_wheel prefix="lf" x=" ${x_off}" y=" ${y_off}" mesh="wheel_lf_Link.STL"/>
+  <xacro:mecanum_wheel prefix="rf" x=" ${x_off}" y="-${y_off}" mesh="wheel_rf_Link.STL"/>
+  <xacro:mecanum_wheel prefix="lb" x="-${x_off}" y=" ${y_off}" mesh="wheel_lb_Link.STL"/>
+  <xacro:mecanum_wheel prefix="rb" x="-${x_off}" y="-${y_off}" mesh="wheel_rb_Link.STL"/>
+
+  <!-- ===== IMU (Part 2 标定将更新 origin) ===== -->
+  <link name="imu_link"/>
+  <joint name="imu_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="imu_link"/>
+    <!-- xyz 占位 (0,0,0)；rpy 来自 vendor mecanum.xacro。Part 2 完成后更新 -->
+    <origin xyz="0 0 0" rpy="0 0 ${-PI/2}"/>
+  </joint>
+
+  <!-- ===== Camera (Gemini 2L) — Part 3 标定将更新 origin ===== -->
+  <link name="camera_link">
+    <inertial>
+      <origin rpy="0 0 0" xyz="0.0023 0.0011 -0.0102"/>
+      <mass value="0.027"/>
+      <inertia ixx="1.44E-05" ixy="0" ixz="0" iyy="1.66E-06" iyz="0" izz="1.46E-05"/>
+    </inertial>
+    <visual>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry><mesh filename="package://mentorpi_description/meshes/mecanum/cam_Link.STL"/></geometry>
+      <material name="black"/>
+    </visual>
+    <collision>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry><mesh filename="package://mentorpi_description/meshes/mecanum/cam_Link.STL"/></geometry>
+    </collision>
+  </link>
+  <joint name="camera_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="camera_link"/>
+    <!-- Vendor CAD 值；Part 3 AprilTag 标定后更新 -->
+    <origin xyz="0.061376 0 0.051154" rpy="0 0 0"/>
+  </joint>
+
+  <!-- Optical frames: ROS REP-103 (z-forward, x-right, y-down). 与 Orbbec 驱动发的 frame 名一致 -->
+  <link name="camera_color_optical_frame"/>
+  <joint name="camera_color_optical_joint" type="fixed">
+    <parent link="camera_link"/>
+    <child link="camera_color_optical_frame"/>
+    <origin xyz="0 0 0" rpy="${-PI/2} 0 ${-PI/2}"/>
+  </joint>
+
+  <link name="camera_depth_optical_frame"/>
+  <joint name="camera_depth_optical_joint" type="fixed">
+    <parent link="camera_link"/>
+    <child link="camera_depth_optical_frame"/>
+    <origin xyz="0 0 0" rpy="${-PI/2} 0 ${-PI/2}"/>
+  </joint>
+
+  <!-- ===== Lidar (MS200) ===== -->
+  <link name="laser_frame">
+    <inertial>
+      <origin rpy="0 0 0" xyz="0 0 -0.018"/>
+      <mass value="0.04"/>
+      <inertia ixx="4.98E-06" ixy="0" ixz="0" iyy="5.04E-06" iyz="0" izz="8.26E-06"/>
+    </inertial>
+    <visual>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry><mesh filename="package://mentorpi_description/meshes/mecanum/lidar_Link.STL"/></geometry>
+      <material name="black"/>
+    </visual>
+    <collision>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry><mesh filename="package://mentorpi_description/meshes/mecanum/lidar_Link.STL"/></geometry>
+    </collision>
+  </link>
+  <joint name="laser_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="laser_frame"/>
+    <!-- Vendor CAD 值（mentorpi.launch.py 的 0.18 是错的占位估计，需同步更新） -->
+    <origin xyz="-0.012242 0 0.092501" rpy="0 0 0"/>
+  </joint>
+
+</robot>
