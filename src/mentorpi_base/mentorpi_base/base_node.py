@@ -99,10 +99,15 @@ class MentorPiBase(Node):
         self.declare_parameter('publish_odom_tf', False)
         self.publish_odom_tf = self.get_parameter('publish_odom_tf').value
 
+        self.declare_parameter('cmd_vel_timeout', 0.5)
+        self.cmd_vel_timeout = self.get_parameter('cmd_vel_timeout').value
+        self.last_cmd_vel_time = self.get_clock().now()
+
         self.odom_pub = self.create_publisher(Odometry, '/odom', 10)
         self.imu_pub = self.create_publisher(Imu, '/imu/data_raw', 10)
         self.tf_broadcaster = TransformBroadcaster(self)
         self.create_timer(0.02, self.odom_timer_callback)  # 50 Hz
+        self.create_timer(0.1, self.watchdog_callback)     # 10 Hz cmd_vel timeout check
 
         # Start serial receive thread for IMU data
         if self.ser:
@@ -118,10 +123,20 @@ class MentorPiBase(Node):
         recv_count = 0
 
         while rclpy.ok():
+            ser = self.ser  # snapshot — watchdog 可能并发把它清成 None
+            if ser is None:
+                time.sleep(0.2)
+                state = STATE_START1
+                frame = []
+                continue
             try:
-                raw = self.ser.read(64)
-            except Exception:
-                break
+                raw = ser.read(64)
+            except (OSError, serial.SerialException, AttributeError):
+                # 让 watchdog 接管重连; 这里只复位解析状态
+                time.sleep(0.2)
+                state = STATE_START1
+                frame = []
+                continue
             if not raw:
                 continue
             for dat in raw:
@@ -203,7 +218,17 @@ class MentorPiBase(Node):
         buf.append(len(data))
         buf.extend(data)
         buf.append(checksum_crc8(bytes(buf[2:])))
-        self.ser.write(bytes(buf))
+        try:
+            self.ser.write(bytes(buf))
+        except (OSError, serial.SerialException) as e:
+            # 保住进程不被串口瞬态错误(USB线松动 / STM32 reset)杀掉
+            # 否则 watchdog 也会跟着死, STM32 上最后一笔速度无人撤销 -> 跑飞
+            self.get_logger().error(f"Serial write failed: {e} — closing port, will retry")
+            try:
+                self.ser.close()
+            except Exception:
+                pass
+            self.ser = None
 
     def set_motor_speed(self, speeds):
         """speeds: list of [motor_id, speed], motor_id 1-based, speed -1.0~1.0"""
@@ -277,6 +302,7 @@ class MentorPiBase(Node):
         self.cmd_vx = vx
         self.cmd_vy = vy
         self.cmd_wz = wz
+        self.last_cmd_vel_time = self.get_clock().now()
 
         wheelbase = 0.1368      # 前后轴距
         track_width = 0.1410    # 左右轴距
@@ -300,6 +326,39 @@ class MentorPiBase(Node):
             [4, to_rps(m4)],
         ])
 
+    def watchdog_callback(self):
+        # 串口断了就尝试重连, 重连后立即发停车
+        if self.ser is None:
+            try:
+                port = self.get_parameter('port').value
+                baud = self.get_parameter('baudrate').value
+                self.ser = serial.Serial(None, baud, timeout=0.1)
+                self.ser.rts = False
+                self.ser.dtr = False
+                self.ser.setPort(port)
+                self.ser.open()
+                self.get_logger().info(f"Serial reconnected: {port}")
+                # 重连成功必须立即停车 — STM32 上之前可能还在跑
+                self.cmd_vx = 0.0
+                self.cmd_vy = 0.0
+                self.cmd_wz = 0.0
+                self.set_motor_speed([[1, 0], [2, 0], [3, 0], [4, 0]])
+            except Exception:
+                self.ser = None  # 还连不上, 下次再试
+            return
+
+        # 如果 /cmd_vel 超时未到达, 主动停车并清里程计速度
+        # 防止 teleop 崩溃 / 手柄断连 时 STM32 上最后一笔速度无人撤销
+        elapsed = (self.get_clock().now() - self.last_cmd_vel_time).nanoseconds / 1e9
+        if elapsed > self.cmd_vel_timeout:
+            if self.cmd_vx != 0.0 or self.cmd_vy != 0.0 or self.cmd_wz != 0.0:
+                self.get_logger().warn(
+                    f"/cmd_vel timeout ({elapsed:.2f}s > {self.cmd_vel_timeout}s) — stopping motors")
+                self.cmd_vx = 0.0
+                self.cmd_vy = 0.0
+                self.cmd_wz = 0.0
+                self.set_motor_speed([[1, 0], [2, 0], [3, 0], [4, 0]])
+
     def gimbal_callback(self, msg):
         def angle_to_pulse(angle):
             a = max(0, min(180, angle))
@@ -318,9 +377,19 @@ class MentorPiBase(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = MentorPiBase()
-    rclpy.spin(node)
-    node.destroy_node()
-    rclpy.shutdown()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        # 退出前停车,避免 STM32 上残留最后一笔速度继续跑
+        try:
+            node.set_motor_speed([[1, 0], [2, 0], [3, 0], [4, 0]])
+        except Exception:
+            pass
+        node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 if __name__ == '__main__':
     main()

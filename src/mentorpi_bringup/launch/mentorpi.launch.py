@@ -84,10 +84,10 @@ def generate_launch_description():
             condition=IfCondition(PythonExpression(["'", camera_type, "' == 'gemini2l'"])),
         ),
 
-        # 3. 手柄驱动 (ROS 2 Joy)
+        # 3. 手柄驱动 (joydev, 绕过 SDL2 — D-input dongle 在 SDL2 下会反相 / 启动时给出 +1.0 假值)
         Node(
-            package='joy',
-            executable='joy_node',
+            package='joy_linux',
+            executable='joy_linux_node',
             name='joy_node',
             output='screen'
         ),
