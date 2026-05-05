@@ -3,7 +3,7 @@ from rclpy.node import Node
 from geometry_msgs.msg import Twist, TransformStamped, Quaternion
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import Imu
-from mentorpi_msgs.msg import Gimbal, MotorStatus
+from mentorpi_msgs.msg import Gimbal, MotorStatus, Buzzer
 from tf2_ros import TransformBroadcaster
 import serial
 import struct
@@ -46,6 +46,7 @@ def checksum_crc8(data):
         check = crc8_table[check ^ b]
     return check & 0xFF
 
+FUNC_BUZZER = 2
 FUNC_MOTOR = 3
 FUNC_PWM_SERVO = 4
 FUNC_IMU = 7
@@ -64,7 +65,7 @@ class MentorPiBase(Node):
     def __init__(self):
         super().__init__('mentorpi_base')
 
-        self.declare_parameter('port', '/dev/ttyACM0')
+        self.declare_parameter('port', '/dev/serial/by-id/usb-1a86_USB_Single_Serial_5B21250490-if00')
         self.declare_parameter('baudrate', 1000000)
 
         port = self.get_parameter('port').value
@@ -86,6 +87,7 @@ class MentorPiBase(Node):
 
         self.cmd_vel_sub = self.create_subscription(Twist, '/cmd_vel', self.cmd_vel_callback, 10)
         self.gimbal_sub = self.create_subscription(Gimbal, '/gimbal/cmd', self.gimbal_callback, 10)
+        self.buzzer_sub = self.create_subscription(Buzzer, '/buzzer', self.buzzer_callback, 10)
 
         # Odometry state (command-based dead-reckoning)
         self.pose_x = 0.0
@@ -229,6 +231,13 @@ class MentorPiBase(Node):
             except Exception:
                 pass
             self.ser = None
+
+    def buzzer_callback(self, msg):
+        # uint16 LE: freq, on_time_ms, off_time_ms, repeat
+        on_ms = max(0, min(0xFFFF, int(msg.on_time * 1000)))
+        off_ms = max(0, min(0xFFFF, int(msg.off_time * 1000)))
+        data = struct.pack('<HHHH', int(msg.freq), on_ms, off_ms, int(msg.repeat))
+        self.send_packet(FUNC_BUZZER, data)
 
     def set_motor_speed(self, speeds):
         """speeds: list of [motor_id, speed], motor_id 1-based, speed -1.0~1.0"""

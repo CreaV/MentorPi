@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#101418">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <title>MentorPi</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <header id="status-bar">
+    <span id="mode-pill" data-mode="unknown">…</span>
+    <span id="conn-pill" data-state="connecting">connecting</span>
+  </header>
+
+  <section id="video">
+    <img id="cam" alt="camera" decoding="async">
+    <div id="video-msg">no signal</div>
+  </section>
+
+  <section id="modes">
+    <button class="mode-btn" data-mode="idle">Idle</button>
+    <button class="mode-btn" data-mode="slam_2d">2D SLAM</button>
+    <button class="mode-btn" data-mode="slam_3d">3D SLAM</button>
+    <button class="mode-btn" data-mode="loc_2d">Loc 2D</button>
+  </section>
+
+  <section id="sticks">
+    <div id="stick-left" class="stick-pad">
+      <span class="stick-label">move</span>
+    </div>
+    <div id="stick-right" class="stick-pad">
+      <span class="stick-label">turn</span>
+    </div>
+  </section>
+
+  <div id="map-sheet" hidden>
+    <div class="sheet-card">
+      <div class="sheet-head">
+        <span>Choose 2D map</span>
+        <button id="map-close">×</button>
+      </div>
+      <ul id="map-list"></ul>
+      <div class="sheet-foot">
+        <button id="map-refresh">Refresh</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast"></div>
+
+  <script src="./vendor/roslib.min.js"></script>
+  <script src="./vendor/nipplejs.min.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>

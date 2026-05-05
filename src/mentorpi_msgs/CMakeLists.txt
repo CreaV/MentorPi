@@ -12,6 +12,9 @@ find_package(rosidl_default_generators REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/Gimbal.msg"
   "msg/MotorStatus.msg"
+  "msg/Buzzer.msg"
+  "srv/SetMode.srv"
+  "srv/ListMaps.srv"
 )
 
 if(BUILD_TESTING)

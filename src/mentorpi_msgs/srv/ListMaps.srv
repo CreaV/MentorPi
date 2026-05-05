@@ -1,0 +1,7 @@
+# Request: list available maps for a given mode.
+# mode: "loc_2d" -> .posegraph files in ~/maps/
+#       "slam_3d" -> .db files in ~/rtabmap_maps/
+string mode
+---
+# Identifiers usable as map_file/database_path in SetMode.
+string[] maps

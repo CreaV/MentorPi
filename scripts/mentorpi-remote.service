@@ -1,0 +1,37 @@
+[Unit]
+Description=MentorPi remote operation (ROS 2 base + foxglove_bridge + supervisor)
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+# Explicit list so systemd-late versions don't drop supplementary groups.
+SupplementaryGroups=dialout video plugdev input
+
+WorkingDirectory=/home/pi/workdir/mentorpi/mentorpi_ws
+Environment=HOME=/home/pi
+# Minimal PATH that excludes conda's bin so any nested `python3` resolves to
+# the system 3.12 (jazzy's rclpy C extension is built for 3.12).
+Environment=PATH=/usr/bin:/usr/local/bin:/opt/ros/jazzy/bin
+
+# Use non-login non-interactive bash to avoid sourcing ~/.bashrc (which on this
+# box auto-activates miniforge and breaks rclpy imports).
+ExecStart=/bin/bash -c 'source /opt/ros/jazzy/setup.bash && source install/setup.bash && exec ros2 launch mentorpi_supervisor remote.launch.py'
+
+# ros2 launch propagates SIGINT to its children for graceful shutdown.
+KillSignal=SIGINT
+TimeoutStopSec=30
+
+Restart=on-failure
+RestartSec=5
+
+# A burst of resets within a short window means something fundamental is broken
+# (e.g. /dev/ttyACM0 not enumerated yet, USB camera unplugged); back off instead
+# of hammering systemd.
+StartLimitBurst=5
+StartLimitIntervalSec=60
+
+[Install]
+WantedBy=multi-user.target

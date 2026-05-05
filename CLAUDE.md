@@ -19,14 +19,15 @@ colcon build --packages-select mentorpi_base
 # Source after build
 source install/setup.bash
 
-# Launch full system (2D SLAM, with IMU+EKF fusion)
-ros2 launch mentorpi_bringup mapping.launch.py
+# Remote operation entry point (Foxglove Studio client over WebSocket)
+# Brings up base + foxglove_bridge + supervisor; modes are switched by
+# calling /mode/set service from Foxglove (no relaunch).
+ros2 launch mentorpi_supervisor remote.launch.py
 
-# Launch 3D SLAM (RTAB-Map + Gemini 2L)
-ros2 launch mentorpi_bringup rtabmap_mapping.launch.py
-
-# Launch localization with existing 2D map
-ros2 launch mentorpi_bringup localization.launch.py
+# CLI shortcuts for direct full-stack runs (no supervisor):
+ros2 launch mentorpi_bringup mapping.launch.py            # = base + slam_2d
+ros2 launch mentorpi_bringup rtabmap_mapping.launch.py    # = base + slam_3d
+ros2 launch mentorpi_bringup localization.launch.py       # = base + loc_2d
 ```
 
 **Important:** Must use system Python 3.12 (`/usr/bin/python3.12`) for ROS2 Python scripts, not conda's Python 3.13. The `ros2` CLI and `colcon` handle this automatically, but direct `python3 some_script.py` will fail.
@@ -117,17 +118,19 @@ map → odom → base_link → camera_link → camera_*_optical_frame
                          (static, z=0.18m)
 ```
 
-**相机-底盘标定**:`base_link → camera_link` 静态 TF 在 `rtabmap_mapping.launch.py` 里手填(默认 x=0.05, z=0.15, 无旋转,**只是估计值,需用尺子量后校准**)。如果相机有俯仰角(如低头看地面),记得填 RPY 的 pitch(弧度制)。
+**相机-底盘标定**:`base_link → camera_link` 静态 TF 在 `base.launch.py` 里手填(默认 x=0.05, z=0.15, 无旋转,**只是估计值,需用尺子量后校准**)。如果相机有俯仰角(如低头看地面),记得填 RPY 的 pitch(弧度制)。
+
+**相机生命周期**:Gemini 2L 在 `base.launch.py` 里**常驻**(15fps RGB-D),`/camera/color/image_raw` 始终可订,跨模式切换不重启相机。`slam_3d` 模式只在已运行的相机流上加 rtabmap + 点云;2D / loc / idle 模式也能直接用相机预览(虽然没用到 depth)。永久代价:相机 driver ~15-20% CPU on Pi 5。
 
 ## Packages
 
 | Package | Type | Node(s) | Description |
 |---------|------|---------|-------------|
-| `mentorpi_msgs` | C++ (ament_cmake) | — | `msg/Gimbal.msg`, `msg/MotorStatus.msg` |
+| `mentorpi_msgs` | C++ (ament_cmake) | — | `msg/Gimbal.msg`, `msg/MotorStatus.msg`, `srv/SetMode.srv`, `srv/ListMaps.srv` |
 | `mentorpi_base` | Python | `base_node` | Serial protocol, mecanum kinematics, odometry, IMU |
 | `mentorpi_teleop` | Python | `teleop_node` | Joystick mapping |
-| `mentorpi_vision` | Python | `vision_node` | OpenCV camera capture |
 | `mentorpi_bringup` | Python | — | Launch files and config (see below) |
+| `mentorpi_supervisor` | Python | `supervisor_node` | Mode switcher; subprocess-launches slam_2d/slam_3d/loc_2d on request |
 | `oradar_lidar` | C++ (ament_cmake) | `oradar_scan` | MS200 lidar driver |
 
 ### External Packages (apt)
@@ -139,15 +142,24 @@ map → odom → base_link → camera_link → camera_*_optical_frame
 | `imu_filter_madgwick` | `imu_filter_madgwick_node` | Both modes |
 | `robot_localization` | `ekf_node` | Both modes |
 | `orbbec_camera` | `camera` (Gemini 2L driver) | 3D SLAM |
+| `foxglove_bridge` | `foxglove_bridge` | 桌面 Foxglove Studio |
+| `rosbridge_suite` | `rosbridge_websocket` | 移动 SPA roslibjs ws 桥 |
+| `web_video_server` | `web_video_server` | 移动 SPA MJPEG 视频流 |
 
 ### Launch Files
 
-| File | Description |
-|------|-------------|
-| `mentorpi.launch.py` | Base hardware: base_node + STM32 IMU Madgwick + EKF + camera + joy + teleop + lidar |
-| `mapping.launch.py` | = mentorpi.launch.py + slam_toolbox (2D mapping) |
-| `localization.launch.py` | = mentorpi.launch.py + slam_toolbox localization mode |
-| `rtabmap_mapping.launch.py` | Standalone: base_node + STM32 IMU Madgwick + EKF + Gemini 2L (RGB-D only) + RTAB-Map (3D SLAM, 异构架构) |
+Architecture: **base 常驻 + 模式按需挂载**。`base.launch.py` 在 `remote.launch.py` 启动时拉起，supervisor 负责切换 mode-only 子 launch（slam_2d / slam_3d / loc_2d），切换不重启 base，里程计/TF 不归零。
+
+| File | Package | Description |
+|------|---------|-------------|
+| `base.launch.py` | mentorpi_bringup | 常驻硬件: base_node + STM32 IMU Madgwick + EKF + Gemini 2L (RGB-D 15fps) + joy + teleop + lidar + base→camera/laser TF |
+| `slam_2d.launch.py` | mentorpi_bringup | 仅 slam_toolbox 异步建图 |
+| `slam_3d.launch.py` | mentorpi_bringup | 仅 rtabmap + point_cloud_xyzrgb (相机已在 base 里跑) |
+| `loc_2d.launch.py` | mentorpi_bringup | 仅 slam_toolbox 定位 (吃 `map_file:=...`) |
+| `mapping.launch.py` | mentorpi_bringup | CLI 包装: base + slam_2d |
+| `rtabmap_mapping.launch.py` | mentorpi_bringup | CLI 包装: base + slam_3d (吃 `database_path:=...`) |
+| `localization.launch.py` | mentorpi_bringup | CLI 包装: base + loc_2d |
+| `remote.launch.py` | mentorpi_supervisor | 远程操作入口: base + foxglove_bridge + supervisor_node |
 
 ### Config Files (`src/mentorpi_bringup/config/`)
 
@@ -165,6 +177,7 @@ map → odom → base_link → camera_link → camera_*_optical_frame
 **Sending (main thread):**
 - Motor speed commands (Function=3) from `/cmd_vel`
 - Gimbal servo commands (Function=4) from `/gimbal/cmd`
+- Buzzer commands (Function=2) from `/buzzer` (`mentorpi_msgs/Buzzer`: `freq` Hz, `on_time`/`off_time` seconds, `repeat` cycles). Used by supervisor for the startup chime.
 
 **Receiving (background thread):**
 - IMU data (Function=7) → publishes `/imu/data_raw` (sensor_msgs/Imu)
@@ -173,7 +186,7 @@ map → odom → base_link → camera_link → camera_*_optical_frame
 **Parameters:**
 | Param | Default | Description |
 |-------|---------|-------------|
-| `port` | `/dev/ttyACM0` | Serial device |
+| `port` | `/dev/serial/by-id/usb-1a86_USB_Single_Serial_5B21250490-if00` | Serial device (by-id 稳定路径,避免 ttyACM 编号在 USB 重枚举后漂移) |
 | `baudrate` | `1000000` | Baud rate |
 | `publish_odom_tf` | `False` | Publish odom→base_link TF (disable when EKF handles it) |
 
@@ -208,7 +221,7 @@ Known issue documented there: `mentorpi.launch.py` is missing the `base_link →
 
 Full protocol documented in `docs/hardware_protocol.md`. Critical details:
 
-- **Device:** `/dev/ttyACM0` @ 1,000,000 baud. Must set `rts=False, dtr=False` before opening.
+- **Device:** `/dev/serial/by-id/usb-1a86_USB_Single_Serial_5B21250490-if00` @ 1,000,000 baud (枚举为 `/dev/ttyACMx`,但用 by-id 稳定路径)。Must set `rts=False, dtr=False` before opening.
 - **Packet:** `[0xAA] [0x55] [Function] [Length] [Data...] [CRC8]`. CRC8 uses lookup table (not bit-by-bit), computed over Function+Length+Data.
 - **Motor IDs are 0-indexed** in the protocol (motor 1 sends as 0). Speed is float32 LE in rps.
 - **Motors 1,2 are sign-inverted** in the mecanum kinematics (official SDK convention).
@@ -356,11 +369,91 @@ The system provides all inputs Nav2 needs:
 
 ### Switching between 2D and 3D modes
 
-The two modes are independent launch files sharing the same EKF-based frontend (base_node + STM32 IMU madgwick + ekf_node). They should not run simultaneously — both publish `odom → base_link` TF (from EKF) and `map → odom` TF (slam_toolbox vs rtabmap), which would conflict.
+The two modes share the same EKF-based frontend (base_node + STM32 IMU madgwick + ekf_node) and must not run simultaneously — both publish `map → odom` TF (slam_toolbox vs rtabmap), which would conflict.
+
+**生产用法走 `mentorpi_supervisor`**:`base.launch.py` 常驻不动,supervisor 通过 subprocess 启停模式专用 launch (`slam_2d` / `slam_3d` / `loc_2d`)。切换不重启 base,里程计/TF 连续。
 
 主要差别:
-- **2D 模式**:lidar `/scan` → slam_toolbox 出 `map → odom`
-- **3D 模式**:Gemini 2L RGB-D → rtabmap 出 `map → odom` + 累积彩色点云
+- **2D SLAM**:lidar `/scan` → slam_toolbox 出 `map → odom`
+- **3D SLAM**:Gemini 2L RGB-D → rtabmap 出 `map → odom` + 累积彩色点云
+- **2D Localization**:slam_toolbox loc 模式 + 已有 posegraph
+- **idle**:无 SLAM,纯遥控+预览
+
+## Remote Operation
+
+`ros2 launch mentorpi_supervisor remote.launch.py` 在 base 之上额外起 5 个进程,同时支持桌面客户端和移动客户端:
+
+| 端口 | 服务 | 客户端 |
+|------|------|--------|
+| 8000 | python `http.server` (静态 SPA) | 手机/平板 浏览器 |
+| 8081 | `web_video_server` (MJPEG) | 手机/平板 浏览器 (`<img>`) |
+| 9090 | `rosbridge_websocket` | 手机/平板 SPA (roslibjs) |
+| 8765 | `foxglove_bridge` | 桌面 Foxglove Studio |
+
+依赖一次性安装:
+```bash
+sudo apt install -y ros-jazzy-foxglove-bridge ros-jazzy-rosbridge-suite ros-jazzy-web-video-server ros-jazzy-image-transport-plugins
+```
+
+`image-transport-plugins` 提供 `compressed_image_transport`,orbbec driver 装上后会自动多发一路 `/camera/color/image_raw/compressed` (JPEG, ~0.5-1 Mbps)。Foxglove Image 面板订这个,WiFi 带宽从 ~5 Mbps 原始 MJPG 降到能容下控制流(否则 WebSocket 拥塞会拖慢 cmd_vel 等所有 topic)。
+
+### 桌面 (Foxglove Studio)
+
+浏览器开 [studio.foxglove.dev](https://studio.foxglove.dev/) 或下载 desktop app,连 `ws://<robot-ip>:8765`,File → Import layout → 选 `src/mentorpi_supervisor/foxglove_layout/mentorpi.json`。
+
+注意:Foxglove web (https) 连 `ws://` 会被浏览器 mixed-content 拒绝。要么用 desktop app,要么 docker 自托管 studio web build (HTTP),要么给 foxglove_bridge 加 TLS。
+
+### 移动 (手机 / 平板)
+
+浏览器直接打开 `http://<robot-ip>:8000/` 即可。SPA 自连 9090 (控制) + 8081 (视频),布局针对竖屏触屏优化:状态条 + MJPEG 视频 + 模式按钮 + 双虚拟摇杆 (左 linear x/y,右 angular z) + 地图选择 sheet。代码在 `src/mentorpi_supervisor/web/`,vendor 自托管 `roslibjs` + `nipplejs`,**手机端无外网即可工作**。
+
+摇杆默认上限 `MAX_LIN=0.4 m/s`、`MAX_ANG=1.5 rad/s` (见 `web/app.js`),发布 20Hz,松手 300ms 自动归零 (deadman)。
+
+### 开机自启 (systemd)
+
+```bash
+# 安装 + 立即启动 + 开机自启:
+bash scripts/install-systemd.sh
+
+# 查看状态 / 日志:
+systemctl status mentorpi-remote
+journalctl -u mentorpi-remote -f
+
+# 临时停 / 永久卸载:
+sudo systemctl stop mentorpi-remote
+bash scripts/install-systemd.sh disable
+```
+
+unit 文件在 `scripts/mentorpi-remote.service`,关键点:
+- `User=pi`, `SupplementaryGroups=dialout video plugdev input` (访问 ttyACM/ttyUSB/Gemini)
+- `PATH=/usr/bin:/usr/local/bin:/opt/ros/jazzy/bin` 显式排除 conda (否则 rclpy ABI 撞)
+- `bash -c` 非交互非登录,不读 `~/.bashrc`,绕开 conda auto-activate
+- `Restart=on-failure RestartSec=5` + 5次/60秒限流——开机时 ttyACM0 还没枚举会自动重试
+- `KillSignal=SIGINT` 让 ros2 launch 优雅传播给所有节点
+
+成功启动后底盘蜂鸣器会响 3 短声 (~0.5 秒)——听到就说明 base + supervisor 都起来了,可以连客户端。
+
+**Supervisor 接口**:
+
+| Endpoint | Type | Purpose |
+|----------|------|---------|
+| `/mode/set` | `mentorpi_msgs/srv/SetMode` | 切换模式 (`idle`/`slam_2d`/`slam_3d`/`loc_2d`) |
+| `/mode/list_maps` | `mentorpi_msgs/srv/ListMaps` | 列出 `~/maps/*.posegraph` 或 `~/rtabmap_maps/*.db` |
+| `/mode/status` | `std_msgs/String` (transient_local) | 当前模式名,latched |
+| `/buzzer` | `mentorpi_msgs/Buzzer` | supervisor 在 base_node 上线后发一声 "ready" 哔哔 (3×80ms@1900Hz);用 launch arg `enable_startup_chime:=false` 关掉 |
+
+**SetMode 字段**:
+- `mode`:必填
+- `map_file`:`loc_2d` 必填(slam_toolbox 路径不带扩展名,如 `/home/pi/maps/my_room`)
+- `database_path`:`slam_3d` 可选,默认 `~/rtabmap_maps/rtabmap.db`
+
+**安全模型**:第一版裸跑,假设局域网可信(无认证)。生产部署需要在 foxglove_bridge 前加 nginx + TLS + basic auth,或开 `ros-jazzy-foxglove-bridge` 的 TLS。
+
+**视频源**:Gemini 2L 在 base 里常驻,`/camera/color/image_raw` 跨所有模式始终可订。**Foxglove Image 面板必须订 `/camera/color/image_raw/compressed`**(layout 默认配置已切换);订原始 raw 流会让 WebSocket 在 WiFi 上严重拥塞。
+
+**地图保存**(v1 暂不在 supervisor 内):
+- 2D: `ros2 service call /slam_toolbox/serialize_map slam_toolbox/srv/SerializePoseGraph "{filename: '/home/pi/maps/my_room'}"`
+- 3D: rtabmap 边走边自动写 `~/rtabmap_maps/rtabmap.db`
 
 ## Reference Code
 

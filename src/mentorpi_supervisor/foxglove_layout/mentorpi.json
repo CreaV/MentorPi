@@ -1,0 +1,148 @@
+{
+  "configById": {
+    "Image!camera": {
+      "cameraState": {},
+      "followMode": "follow-pose",
+      "topic": "/camera/color/image_raw/compressed",
+      "transformMarkers": false,
+      "synchronize": false,
+      "smooth": false,
+      "flipHorizontal": false,
+      "flipVertical": false,
+      "rotation": 0,
+      "minValue": 0,
+      "maxValue": 10000
+    },
+    "3D!scene": {
+      "cameraState": {
+        "perspective": true,
+        "distance": 8,
+        "phi": 60,
+        "thetaOffset": 45,
+        "targetOffset": [0, 0, 0],
+        "target": [0, 0, 0],
+        "fovy": 45,
+        "near": 0.5,
+        "far": 5000
+      },
+      "followMode": "follow-pose",
+      "followTf": "base_link",
+      "scene": {
+        "transforms": {"axisScale": 0.5}
+      },
+      "transforms": {},
+      "topics": {
+        "/scan": {"visible": true, "colorMode": "flat", "flatColor": "#ff8800"},
+        "/map": {"visible": true},
+        "/rtabmap/cloud": {"visible": true, "pointSize": 2},
+        "/odometry/filtered": {"visible": true}
+      },
+      "layers": {}
+    },
+    "Teleop!joystick": {
+      "topic": "/cmd_vel",
+      "publishRate": 10,
+      "upButton": {"field": "linear-x", "value": 0.3},
+      "downButton": {"field": "linear-x", "value": -0.3},
+      "leftButton": {"field": "angular-z", "value": 1.0},
+      "rightButton": {"field": "angular-z", "value": -1.0}
+    },
+    "Indicator!mode": {
+      "path": "/mode/status.data",
+      "style": "background",
+      "rules": [
+        {"operator": "=", "rawValue": "idle", "color": "#888888", "label": "IDLE"},
+        {"operator": "=", "rawValue": "slam_2d", "color": "#3388ff", "label": "2D SLAM"},
+        {"operator": "=", "rawValue": "slam_3d", "color": "#33aa44", "label": "3D SLAM"},
+        {"operator": "=", "rawValue": "loc_2d", "color": "#aa44aa", "label": "2D LOCALIZATION"}
+      ],
+      "fallbackColor": "#222222",
+      "fallbackLabel": "(no /mode/status yet)"
+    },
+    "CallService!setIdle": {
+      "serviceName": "/mode/set",
+      "requestPayload": "{\n  \"mode\": \"idle\",\n  \"map_file\": \"\",\n  \"database_path\": \"\"\n}",
+      "layout": "vertical",
+      "advancedView": false,
+      "buttonText": "Stop / Idle",
+      "buttonTooltip": "Stop active mode and go idle",
+      "buttonColor": "#888888"
+    },
+    "CallService!setSlam2d": {
+      "serviceName": "/mode/set",
+      "requestPayload": "{\n  \"mode\": \"slam_2d\",\n  \"map_file\": \"\",\n  \"database_path\": \"\"\n}",
+      "layout": "vertical",
+      "advancedView": false,
+      "buttonText": "Start 2D SLAM",
+      "buttonTooltip": "slam_toolbox async mapping",
+      "buttonColor": "#3388ff"
+    },
+    "CallService!setSlam3d": {
+      "serviceName": "/mode/set",
+      "requestPayload": "{\n  \"mode\": \"slam_3d\",\n  \"map_file\": \"\",\n  \"database_path\": \"\"\n}",
+      "layout": "vertical",
+      "advancedView": true,
+      "buttonText": "Start 3D SLAM",
+      "buttonTooltip": "Gemini 2L + RTAB-Map. Set database_path in advanced view to override default.",
+      "buttonColor": "#33aa44"
+    },
+    "CallService!setLoc2d": {
+      "serviceName": "/mode/set",
+      "requestPayload": "{\n  \"mode\": \"loc_2d\",\n  \"map_file\": \"/home/pi/maps/my_room\",\n  \"database_path\": \"\"\n}",
+      "layout": "vertical",
+      "advancedView": true,
+      "buttonText": "Start 2D Localization",
+      "buttonTooltip": "Edit map_file in advanced view to choose a saved map.",
+      "buttonColor": "#aa44aa"
+    },
+    "CallService!listMaps": {
+      "serviceName": "/mode/list_maps",
+      "requestPayload": "{\n  \"mode\": \"loc_2d\"\n}",
+      "layout": "vertical",
+      "advancedView": true,
+      "buttonText": "List maps",
+      "buttonTooltip": "Switch mode to slam_3d in advanced view to list rtabmap dbs."
+    }
+  },
+  "globalVariables": {},
+  "userNodes": {},
+  "playbackConfig": {"speed": 1},
+  "layout": {
+    "first": {
+      "first": "Image!camera",
+      "second": "3D!scene",
+      "direction": "row",
+      "splitPercentage": 40
+    },
+    "second": {
+      "first": {
+        "first": "Teleop!joystick",
+        "second": "Indicator!mode",
+        "direction": "column",
+        "splitPercentage": 65
+      },
+      "second": {
+        "first": {
+          "first": "CallService!setIdle",
+          "second": "CallService!setSlam2d",
+          "direction": "row"
+        },
+        "second": {
+          "first": {
+            "first": "CallService!setSlam3d",
+            "second": "CallService!setLoc2d",
+            "direction": "row"
+          },
+          "second": "CallService!listMaps",
+          "direction": "row",
+          "splitPercentage": 67
+        },
+        "direction": "column"
+      },
+      "direction": "row",
+      "splitPercentage": 30
+    },
+    "direction": "column",
+    "splitPercentage": 55
+  }
+}

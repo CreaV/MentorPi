@@ -1,0 +1,11 @@
+# Request: switch the supervisor to a target mode.
+# mode: one of "idle", "slam_2d", "slam_3d", "loc_2d"
+# map_file: required when mode == "loc_2d" (path without .posegraph extension)
+# database_path: optional override for "slam_3d" rtabmap database (default ~/rtabmap_maps/rtabmap.db)
+string mode
+string map_file
+string database_path
+---
+bool success
+string message
+string current_mode
