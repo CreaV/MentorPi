@@ -181,6 +181,7 @@ Architecture: **base 常驻 + 模式按需挂载**。`base.launch.py` 在 `remot
 
 **Receiving (background thread):**
 - IMU data (Function=7) → publishes `/imu/data_raw` (sensor_msgs/Imu)
+- SYS battery (Function=0, sub-id 0x04) → publishes `/battery` (sensor_msgs/BatteryState; voltage 单位 V,反映 STM32 电源输入电压)
 - State machine packet parser identical to official SDK's `recv_task`
 
 **Parameters:**
@@ -195,6 +196,7 @@ Architecture: **base 常驻 + 模式按需挂载**。`base.launch.py` 在 `remot
 |-------|------|------|-------------|
 | `/odom` | Odometry | 50Hz | Dead-reckoning from cmd_vel integration |
 | `/imu/data_raw` | Imu | ~50Hz | Raw accel (m/s²) + gyro (rad/s), no orientation |
+| `/battery` | BatteryState | ~1Hz | STM32 电源输入电压(V),Foxglove Gauge 默认量程 6-13V(覆盖 2S/3S lipo);`present=false` 表示采样异常或未接电池 |
 
 ## IMU Data Flow
 
@@ -454,6 +456,22 @@ unit 文件在 `scripts/mentorpi-remote.service`,关键点:
 **地图保存**(v1 暂不在 supervisor 内):
 - 2D: `ros2 service call /slam_toolbox/serialize_map slam_toolbox/srv/SerializePoseGraph "{filename: '/home/pi/maps/my_room'}"`
 - 3D: rtabmap 边走边自动写 `~/rtabmap_maps/rtabmap.db`
+
+## Known Issues
+
+### STM32 蜂鸣器在 Pi 接官方 PSU 时持续 5 声循环报警
+
+**症状**:Pi 由 STM32 共享的 Type-C 供电时一切正常;改用官方原装 PSU 单独给 Pi 供电后,STM32 蜂鸣器开始 5 声 × 1 秒循环报警。SDK 主机侧不发任何 5 声序列(已 grep 确认),所以这是 STM32 固件本身的报警。
+
+**最可能根因**(尚未实测确认):
+1. **反灌**:STM32 → Pi 的 Type-C 共享线没拔,Pi 被官方 PSU 推到 5.1V,反向倒灌进 STM32 输出端,固件触发保护。
+2. **接地环路**:官方 PSU 接市电地,STM32 在电池上(浮地),USB 串口线的 GND 把两个参考地连起来,几百 mV 的电位差让 STM32 ADC 误读自己的电池电压,触发欠压报警(5 声 1Hz 是常见 lipo 欠压模式)。
+
+**判别方法**:用官方 PSU 时,把 STM32 → Pi 的 Type-C 共享线拔掉,只保留 USB 串口线。
+- 5 声没了 → 反灌
+- 还在响 → 接地环路(需要 USB 隔离器,或使用接地良好的 PSU)
+
+短期解决:就用 STM32 共享供电(电池模式),或拔掉 Type-C 共享线只走官方 PSU + 串口线。
 
 ## Reference Code
 

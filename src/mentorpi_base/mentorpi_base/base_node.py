@@ -2,7 +2,7 @@ import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist, TransformStamped, Quaternion
 from nav_msgs.msg import Odometry
-from sensor_msgs.msg import Imu
+from sensor_msgs.msg import Imu, BatteryState
 from mentorpi_msgs.msg import Gimbal, MotorStatus, Buzzer
 from tf2_ros import TransformBroadcaster
 import serial
@@ -46,10 +46,14 @@ def checksum_crc8(data):
         check = crc8_table[check ^ b]
     return check & 0xFF
 
+FUNC_SYS = 0
 FUNC_BUZZER = 2
 FUNC_MOTOR = 3
 FUNC_PWM_SERVO = 4
 FUNC_IMU = 7
+
+# SYS sub-ids
+SYS_BATTERY = 0x04
 
 GRAVITY = 9.80665
 
@@ -107,6 +111,7 @@ class MentorPiBase(Node):
 
         self.odom_pub = self.create_publisher(Odometry, '/odom', 10)
         self.imu_pub = self.create_publisher(Imu, '/imu/data_raw', 10)
+        self.battery_pub = self.create_publisher(BatteryState, '/battery', 10)
         self.tf_broadcaster = TransformBroadcaster(self)
         self.create_timer(0.02, self.odom_timer_callback)  # 50 Hz
         self.create_timer(0.1, self.watchdog_callback)     # 10 Hz cmd_vel timeout check
@@ -171,6 +176,8 @@ class MentorPiBase(Node):
                         data = bytes(frame[2:])
                         if func == FUNC_IMU and len(data) == 24:
                             self._publish_imu(data)
+                        elif func == FUNC_SYS and len(data) == 3 and data[0] == SYS_BATTERY:
+                            self._publish_battery(data[1:])
                     state = STATE_START1
 
     def _publish_imu(self, data):
@@ -212,6 +219,25 @@ class MentorPiBase(Node):
         ]
 
         self.imu_pub.publish(msg)
+
+    def _publish_battery(self, data):
+        # STM32 SYS packet sub-id 0x04: uint16 LE millivolts of input rail.
+        # 反映 STM32 电源输入电压(电池或 DC 适配器),不是 Pi 自己的供电。
+        mv = struct.unpack('<H', data)[0]
+        msg = BatteryState()
+        msg.header.frame_id = 'base_link'
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.voltage = mv / 1000.0
+        msg.current = float('nan')
+        msg.charge = float('nan')
+        msg.capacity = float('nan')
+        msg.design_capacity = float('nan')
+        msg.percentage = float('nan')
+        msg.power_supply_status = BatteryState.POWER_SUPPLY_STATUS_UNKNOWN
+        msg.power_supply_health = BatteryState.POWER_SUPPLY_HEALTH_UNKNOWN
+        msg.power_supply_technology = BatteryState.POWER_SUPPLY_TECHNOLOGY_LIPO
+        msg.present = mv > 1000  # <1V 视为没接电池/采样异常
+        self.battery_pub.publish(msg)
 
     def send_packet(self, func, data):
         if not self.ser:
