@@ -126,8 +126,9 @@ map → odom → base_link → camera_link → camera_*_optical_frame
 
 | Package | Type | Node(s) | Description |
 |---------|------|---------|-------------|
-| `mentorpi_msgs` | C++ (ament_cmake) | — | `msg/Gimbal.msg`, `msg/MotorStatus.msg`, `srv/SetMode.srv`, `srv/ListMaps.srv` |
+| `mentorpi_msgs` | C++ (ament_cmake) | — | `msg/Gimbal.msg`, `msg/MotorStatus.msg`, `msg/Buzzer.msg`, `srv/SetMode.srv`, `srv/ListMaps.srv`, `action/MotionPrimitive.action` |
 | `mentorpi_base` | Python | `base_node` | Serial protocol, mecanum kinematics, odometry, IMU |
+| `mentorpi_motion` | Python | `motion_node` | 有界运动原语 action server（语音/VLA/agent 的执行底座，base.launch 常驻） |
 | `mentorpi_teleop` | Python | `teleop_node` | Joystick mapping |
 | `mentorpi_bringup` | Python | — | Launch files and config (see below) |
 | `mentorpi_supervisor` | Python | `supervisor_node` | Mode switcher; subprocess-launches slam_2d/slam_3d/loc_2d on request |
@@ -462,6 +463,18 @@ unit 文件在 `scripts/mentorpi-remote.service`,关键点:
 **地图保存**(v1 暂不在 supervisor 内):
 - 2D: `ros2 service call /slam_toolbox/serialize_map slam_toolbox/srv/SerializePoseGraph "{filename: '/home/pi/maps/my_room'}"`
 - 3D: rtabmap 边走边自动写 `~/rtabmap_maps/rtabmap.db`
+
+## Motion Primitives（语音 / VLA / agent 的运动执行底座）
+
+`mentorpi_motion/motion_node`（`base.launch.py` 常驻）提供**有界**运动原语，远端智能（语音 agent、VLA）永远发"意图"而不是裸 cmd_vel 流：
+
+- Action `motion/primitive`（`mentorpi_msgs/action/MotionPrimitive`）：`type` = `forward`/`strafe`/`rotate`，`distance` 米或弧度（带符号），`max_speed`、`timeout` 可选。节点自己以 20Hz 发 `/cmd_vel`（喂 base_node watchdog），用 `/odometry/filtered` 闭环测位移，梯形速度曲线，完成/取消/超时/odom 停更 (>0.5s) 时**一律停车**。单 goal 互斥（忙时拒绝新 goal）。
+- Service `motion/stop`（`std_srvs/Trigger`）：取消当前 goal + 清零速度，接"停"类指令。
+- 每 goal 上限：平移 3m、旋转 ~2 圈；速度上限 0.4 m/s / 1.5 rad/s（参数可调）。
+- 测试：`src/mentorpi_motion/test/test_motion_node.py` 用假底盘闭环仿真，dev 机可跑（无需硬件）。
+- **rclpy 坑**（已修，勿回退）：Jazzy 的 `goal_handle.succeed()/abort()/canceled()` 会立即用**空 Result** 填 result future，靠 execute 回调返回值回填会跟客户端 result 请求竞态（高负载下客户端拿到空结果）。必须把 result 作为参数传给终态调用（见 `MotionNode._finalize`）。
+
+**语音接入**：AsynchronousIntentRoutingEngine（独立仓库）的 `robot` skill 通过 rosbridge (:9090) 调上述接口；服务器端设 `AIR_ROBOT_ROSBRIDGE_URL=ws://<robot-ip>:9090` 即启用。手动验证：AIRE 仓库 `python robot_cli.py ws://<robot-ip>:9090 move forward 0.5`。整体规划见 `docs/roadmap.md`。
 
 ## 3D 可视化 & 高斯泼溅 (Gaussian Splatting)
 

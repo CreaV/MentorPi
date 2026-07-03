@@ -8,6 +8,7 @@ endif()
 # find dependencies
 find_package(ament_cmake REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
+find_package(action_msgs REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/Gimbal.msg"
@@ -15,6 +16,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/Buzzer.msg"
   "srv/SetMode.srv"
   "srv/ListMaps.srv"
+  "action/MotionPrimitive.action"
+  DEPENDENCIES action_msgs
 )
 
 if(BUILD_TESTING)

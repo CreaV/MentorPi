@@ -1,0 +1,20 @@
+# Bounded, odometry-closed-loop motion primitive.
+# The safe way for voice / VLA / agents to move the base: every goal has a
+# finite displacement and a timeout; the server streams cmd_vel itself and
+# always stops the base on completion, cancel, timeout or stale odom.
+
+string TYPE_FORWARD = forward   # body +x, signed distance (m)
+string TYPE_STRAFE = strafe     # body +y (left), signed distance (m)
+string TYPE_ROTATE = rotate     # +z (CCW), signed angle (rad)
+
+string type
+float32 distance      # meters (forward/strafe) or radians (rotate), signed
+float32 max_speed     # m/s or rad/s; 0 = server default
+float32 timeout       # seconds; 0 = auto from distance/speed
+---
+bool success
+string message
+float32 traveled      # actual displacement along the commanded axis
+---
+float32 traveled
+float32 progress      # 0..1

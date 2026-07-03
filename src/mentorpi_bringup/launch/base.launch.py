@@ -80,6 +80,16 @@ def generate_launch_description():
             }.items(),
         ),
 
+        # Bounded motion primitives (voice / VLA / agent execution substrate).
+        # Idle unless an action goal arrives; always stops the base on
+        # completion/cancel/timeout/stale-odom.
+        Node(
+            package='mentorpi_motion',
+            executable='motion_node',
+            name='mentorpi_motion',
+            output='screen',
+        ),
+
         # Joystick (joy_linux bypasses SDL2 issues with the BTP-KP20D dongle).
         Node(
             package='joy_linux',
