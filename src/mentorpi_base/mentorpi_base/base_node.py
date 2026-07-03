@@ -149,8 +149,11 @@ class MentorPiBase(Node):
                 continue
             try:
                 raw = ser.read(64)
-            except (OSError, serial.SerialException, AttributeError):
-                # 让 watchdog 接管重连; 这里只复位解析状态
+            except (OSError, serial.SerialException, AttributeError, TypeError):
+                # 让 watchdog 接管重连; 这里只复位解析状态。
+                # TypeError: watchdog 并发 close() 会把 pyserial 的 fd 置
+                # None, os.read(None) 抛 TypeError —— USB 过流掉线时实测
+                # 命中过,不接住的话本线程死掉,重连后 IMU 永久失联。
                 time.sleep(0.2)
                 state = STATE_START1
                 frame = []
@@ -185,10 +188,19 @@ class MentorPiBase(Node):
                     if checksum_crc8(bytes(frame)) == dat:
                         func = frame[0]
                         data = bytes(frame[2:])
-                        if func == FUNC_IMU and len(data) == 24:
-                            self._publish_imu(data)
-                        elif func == FUNC_SYS and len(data) == 3 and data[0] == SYS_BATTERY:
-                            self._publish_battery(data[1:])
+                        try:
+                            if func == FUNC_IMU and len(data) == 24:
+                                self._publish_imu(data)
+                            elif func == FUNC_SYS and len(data) == 3 and data[0] == SYS_BATTERY:
+                                self._publish_battery(data[1:])
+                        except Exception as e:
+                            # rclpy context 关闭时 publish 抛 RCLError;其余
+                            # 异常也不能杀本线程(它没有替补)。
+                            if not rclpy.ok():
+                                return
+                            self.get_logger().warn(
+                                f"publish failed in recv thread: {e}",
+                                throttle_duration_sec=5.0)
                     state = STATE_START1
 
     def _publish_imu(self, data):

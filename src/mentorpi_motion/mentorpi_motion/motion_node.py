@@ -171,7 +171,13 @@ class MotionNode(Node):
     # ------- execution -------
 
     def _publish_stop(self):
-        self._cmd_pub.publish(Twist())
+        try:
+            self._cmd_pub.publish(Twist())
+        except Exception:
+            # Only fails when the rclpy context is already torn down
+            # (shutdown race) — the base's own cmd_vel watchdog stops the
+            # motors in that case.
+            pass
 
     def _traveled(self, goal_type: str, start, current) -> float:
         x0, y0, yaw0 = start
