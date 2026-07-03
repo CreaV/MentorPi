@@ -59,6 +59,15 @@
       "fallbackColor": "#222222",
       "fallbackLabel": "(no /mode/status yet)"
     },
+    "Gauge!battery": {
+      "path": "/battery.voltage",
+      "minValue": 6,
+      "maxValue": 13,
+      "colorMap": "red-yellow-green",
+      "colorMode": "colormap",
+      "gradient": ["#ff3333", "#33aa44"],
+      "reverse": false
+    },
     "CallService!setIdle": {
       "serviceName": "/mode/set",
       "requestPayload": "{\n  \"mode\": \"idle\",\n  \"map_file\": \"\",\n  \"database_path\": \"\"\n}",
@@ -117,7 +126,12 @@
     "second": {
       "first": {
         "first": "Teleop!joystick",
-        "second": "Indicator!mode",
+        "second": {
+          "first": "Indicator!mode",
+          "second": "Gauge!battery",
+          "direction": "row",
+          "splitPercentage": 60
+        },
         "direction": "column",
         "splitPercentage": 65
       },
