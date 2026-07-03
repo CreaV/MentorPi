@@ -154,8 +154,9 @@ Architecture: **base 常驻 + 模式按需挂载**。`base.launch.py` 在 `remot
 |------|---------|-------------|
 | `base.launch.py` | mentorpi_bringup | 常驻硬件: base_node + STM32 IMU Madgwick + EKF + Gemini 2L (RGB-D 15fps) + joy + teleop + lidar + base→camera/laser TF |
 | `slam_2d.launch.py` | mentorpi_bringup | 仅 slam_toolbox 异步建图 |
-| `slam_3d.launch.py` | mentorpi_bringup | 仅 rtabmap + point_cloud_xyzrgb (相机已在 base 里跑) |
+| `slam_3d.launch.py` | mentorpi_bringup | 仅 rtabmap + point_cloud_xyzrgb (相机已在 base 里跑)；融合 lidar `/scan` 做 NeighborLinkRefining + proximity detection 抗轮速打滑 |
 | `loc_2d.launch.py` | mentorpi_bringup | 仅 slam_toolbox 定位 (吃 `map_file:=...`) |
+| `loc_3d.launch.py` | mentorpi_bringup | rtabmap 定位模式 (只读已有 .db，吃 `database_path:=...`)；重启后恢复 map 系位姿，供 live_rerun.py 3D 场景实时显示 |
 | `mapping.launch.py` | mentorpi_bringup | CLI 包装: base + slam_2d |
 | `rtabmap_mapping.launch.py` | mentorpi_bringup | CLI 包装: base + slam_3d (吃 `database_path:=...`) |
 | `localization.launch.py` | mentorpi_bringup | CLI 包装: base + loc_2d |
@@ -189,6 +190,10 @@ Architecture: **base 常驻 + 模式按需挂载**。`base.launch.py` 在 `remot
 | `port` | `/dev/serial/by-id/usb-1a86_USB_Single_Serial_5B21250490-if00` | Serial device (by-id 稳定路径,避免 ttyACM 编号在 USB 重枚举后漂移) |
 | `baudrate` | `1000000` | Baud rate |
 | `publish_odom_tf` | `False` | Publish odom→base_link TF (disable when EKF handles it) |
+| `accel_limit_linear` | `1.5` m/s² | odom 积分用的底盘加速度斜坡模型（cmd_vel 是阶跃,底盘不是;0=关闭直接积分指令） |
+| `accel_limit_angular` | `10.0` rad/s² | 同上,角加速度 |
+
+**里程计协方差**:`/odom` 的 **twist** 协方差才是 EKF 实际消费的(融合 vx/vy)。运动时 vx=0.02、vy=0.05(横移打滑更狠)、vyaw=0.2(原地旋转打滑最狠,EKF 已改为不融合它,yaw 率来自陀螺仪);静止时 1e-6 锁死漂移。
 
 **Published topics:**
 | Topic | Type | Rate | Description |
@@ -209,13 +214,15 @@ STM32 (Function=7, 6×float32: ax,ay,az,gx,gy,gz)
   → EKF (fuses with /odom → /odometry/filtered + TF odom→base_link)
 ```
 
+**EKF 融合配置**(`ekf.yaml`):odom0 (/odom) 只融合 **vx/vy**;imu0 (/imu/data) 只融合 **vyaw**(陀螺仪 z 轴角速率,直接、低延迟、不受打滑影响)。此前 odom0 的 vyaw(指令角速率,麦轮原地旋转打滑最严重)和 imu0 的 differential yaw 双重计入同一陀螺仪信号,已移除。`base_link → imu_link` 静态 TF 在 `base.launch.py` 里发布(缺失时 robot_localization 会静默丢弃全部 IMU 测量)。
+
 3D 模式下 Gemini 2L 的 IMU 流通过 launch 参数关掉(`enable_accel/gyro: false`),节省 USB 带宽和 CPU。
 
 ## Calibration
 
 TF tree calibration plan (3 parts: wheel odometry → IMU → camera) documented in `docs/calibration.md`. Status: **TODO, not yet started**. Part 3 (camera extrinsic) will use AprilTag method + a self-developed calibration tool.
 
-Known issue documented there: `mentorpi.launch.py` is missing the `base_link → imu_link` static TF (IMU msg uses `frame_id='imu_link'` but no publisher exists). Must be fixed during Part 2.
+~~Known issue: missing `base_link → imu_link` static TF~~ — **已修复**,`base.launch.py` 现在发布该 TF(平移是估计值,轴向对齐才关键;若控制板装歪需改 RPY)。Part 2 标定时精化。
 
 ## Hardware Serial Protocol
 
@@ -375,8 +382,9 @@ The two modes share the same EKF-based frontend (base_node + STM32 IMU madgwick 
 
 主要差别:
 - **2D SLAM**:lidar `/scan` → slam_toolbox 出 `map → odom`
-- **3D SLAM**:Gemini 2L RGB-D → rtabmap 出 `map → odom` + 累积彩色点云
+- **3D SLAM**:Gemini 2L RGB-D **+ lidar `/scan`** → rtabmap 出 `map → odom` + 累积彩色点云。scan 用于 `RGBD/NeighborLinkRefining`(相邻节点 ICP 修正轮速打滑)和 `RGBD/ProximityBySpace`(重访区域的激光 proximity link,补视觉 loop closure 在白墙/暗光下的盲区)
 - **2D Localization**:slam_toolbox loc 模式 + 已有 posegraph
+- **3D Localization (loc_3d)**:rtabmap 只读定位模式 + 已有 .db,重启后恢复 map 系位姿
 - **idle**:无 SLAM,纯遥控+预览
 
 ## Remote Operation
@@ -437,7 +445,7 @@ unit 文件在 `scripts/mentorpi-remote.service`,关键点:
 
 | Endpoint | Type | Purpose |
 |----------|------|---------|
-| `/mode/set` | `mentorpi_msgs/srv/SetMode` | 切换模式 (`idle`/`slam_2d`/`slam_3d`/`loc_2d`) |
+| `/mode/set` | `mentorpi_msgs/srv/SetMode` | 切换模式 (`idle`/`slam_2d`/`slam_3d`/`loc_2d`/`loc_3d`) |
 | `/mode/list_maps` | `mentorpi_msgs/srv/ListMaps` | 列出 `~/maps/*.posegraph` 或 `~/rtabmap_maps/*.db` |
 | `/mode/status` | `std_msgs/String` (transient_local) | 当前模式名,latched |
 | `/buzzer` | `mentorpi_msgs/Buzzer` | supervisor 在 base_node 上线后发一声 "ready" 哔哔 (3×80ms@1900Hz);用 launch arg `enable_startup_chime:=false` 关掉 |
@@ -445,7 +453,7 @@ unit 文件在 `scripts/mentorpi-remote.service`,关键点:
 **SetMode 字段**:
 - `mode`:必填
 - `map_file`:`loc_2d` 必填(slam_toolbox 路径不带扩展名,如 `/home/pi/maps/my_room`)
-- `database_path`:`slam_3d` 可选,默认 `~/rtabmap_maps/rtabmap.db`
+- `database_path`:`slam_3d`/`loc_3d` 可选,默认 `~/rtabmap_maps/rtabmap.db`
 
 **安全模型**:第一版裸跑,假设局域网可信(无认证)。生产部署需要在 foxglove_bridge 前加 nginx + TLS + basic auth,或开 `ros-jazzy-foxglove-bridge` 的 TLS。
 
@@ -454,6 +462,16 @@ unit 文件在 `scripts/mentorpi-remote.service`,关键点:
 **地图保存**(v1 暂不在 supervisor 内):
 - 2D: `ros2 service call /slam_toolbox/serialize_map slam_toolbox/srv/SerializePoseGraph "{filename: '/home/pi/maps/my_room'}"`
 - 3D: rtabmap 边走边自动写 `~/rtabmap_maps/rtabmap.db`
+
+## 3D 可视化 & 高斯泼溅 (Gaussian Splatting)
+
+完整管线见 `docs/gaussian_splatting.md`。要点:
+
+- `scripts/export_gs_dataset.py`:rtabmap.db → nerfstudio 数据集(回环优化后相机位姿 + RGB/depth + 种子点云),**保持 ROS map 坐标系**
+- 服务器训练 splatfacto 必须加 `--orientation-method none --center-method none --auto-scale-poses False`,导出的 splat.ply 才和 SLAM 地图天然对齐
+- `scripts/live_rerun.py`(跑在查看端 PC,Pi 零负担):Rerun 里显示 splat/SLAM 点云 + 实时机器人位姿(TF via rosbridge :9090)+ 相机 FOV 视锥 + 实时视频;`--serve` 供手机浏览器
+- 重启后流程:切 `loc_3d` 模式 → rtabmap 重定位发布 map→odom → live_rerun 里机器人出现在 splat 场景中的真实位置
+- `scripts/bag_to_rerun.py`:离线 bag 回放调试(不变)
 
 ## Reference Code
 

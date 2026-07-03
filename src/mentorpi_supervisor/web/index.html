@@ -25,6 +25,7 @@
     <button class="mode-btn" data-mode="slam_2d">2D SLAM</button>
     <button class="mode-btn" data-mode="slam_3d">3D SLAM</button>
     <button class="mode-btn" data-mode="loc_2d">Loc 2D</button>
+    <button class="mode-btn" data-mode="loc_3d">Loc 3D</button>
   </section>
 
   <section id="sticks">
@@ -39,7 +40,7 @@
   <div id="map-sheet" hidden>
     <div class="sheet-card">
       <div class="sheet-head">
-        <span>Choose 2D map</span>
+        <span id="map-sheet-title">Choose map</span>
         <button id="map-close">×</button>
       </div>
       <ul id="map-list"></ul>

@@ -12,6 +12,7 @@ Modes:
   slam_2d   ros2 launch mentorpi_bringup slam_2d.launch.py
   slam_3d   ros2 launch mentorpi_bringup slam_3d.launch.py [database_path:=...]
   loc_2d    ros2 launch mentorpi_bringup loc_2d.launch.py map_file:=...
+  loc_3d    ros2 launch mentorpi_bringup loc_3d.launch.py [database_path:=...]
 """
 import os
 import signal
@@ -29,11 +30,12 @@ from mentorpi_msgs.srv import SetMode, ListMaps
 from mentorpi_msgs.msg import Buzzer
 
 
-VALID_MODES = {'idle', 'slam_2d', 'slam_3d', 'loc_2d'}
+VALID_MODES = {'idle', 'slam_2d', 'slam_3d', 'loc_2d', 'loc_3d'}
 
 MAP_DIRS = {
     'loc_2d': Path.home() / 'maps',
     'slam_3d': Path.home() / 'rtabmap_maps',
+    'loc_3d': Path.home() / 'rtabmap_maps',
 }
 
 DEFAULT_RTABMAP_DB = str(Path.home() / 'rtabmap_maps' / 'rtabmap.db')
@@ -170,7 +172,7 @@ class SupervisorNode(Node):
             # slam_toolbox saves <name>.posegraph + <name>.data; expose <name>.
             names = sorted({p.stem for p in directory.glob('*.posegraph')})
             response.maps = [str(directory / n) for n in names]
-        elif mode == 'slam_3d':
+        elif mode in ('slam_3d', 'loc_3d'):
             response.maps = sorted(str(p) for p in directory.glob('*.db'))
         else:
             response.maps = []
@@ -182,7 +184,7 @@ class SupervisorNode(Node):
         cmd = ['ros2', 'launch', 'mentorpi_bringup', f'{mode}.launch.py']
         if mode == 'loc_2d':
             cmd.append(f'map_file:={map_file}')
-        elif mode == 'slam_3d':
+        elif mode in ('slam_3d', 'loc_3d'):
             cmd.append(f'database_path:={database_path or DEFAULT_RTABMAP_DB}')
 
         self.get_logger().info(f'launching: {" ".join(cmd)}')

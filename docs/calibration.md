@@ -12,7 +12,7 @@ map → odom → base_link → camera_link → camera_*_optical_frame
 |-------|------|-------------|
 | `map → odom` | rtabmap / slam_toolbox | 否（算法输出） |
 | `odom → base_link` | EKF（融合 `/odom` + `/imu/data`） | **是** — 需要标定轮速里程计 + IMU |
-| `base_link → imu_link` | （当前缺失） | **是** — 需要补静态 TF |
+| `base_link → imu_link` | static_transform_publisher（`base.launch.py`，已补） | **是** — 平移/RPY 是估计值，需按 Part 2 精化 |
 | `base_link → camera_link` | static_transform_publisher | **是** — 当前是占位估计值 |
 | `base_link → laser_frame` | static_transform_publisher | 否（z=0.18 已实测） |
 | `camera_link → camera_*_optical_frame` | Orbbec 驱动 | 否（出厂标定） |
@@ -125,7 +125,7 @@ source install/setup.bash
 
 ## Part 2 — STM32 IMU 标定
 
-> ⚠️ **隐藏 bug**：`base_node.py:163` 把 IMU msg 标 `frame_id='imu_link'`，但 `mentorpi.launch.py` **没有发布 `base_link → imu_link` 静态 TF**。EKF 默认把 IMU 当作在 base_link 帧上，如果 IMU 没和车体完全同向，融合出来的 yaw 会有偏差。**标定时必须补上这条 TF。**
+> ~~隐藏 bug：缺失 `base_link → imu_link` 静态 TF~~ **已修复**：`base.launch.py` 现在发布该 TF（缺失时 robot_localization 会静默丢弃全部 IMU 测量）。当前数值是估计值（z=0.05、零旋转），本 Part 的任务是按下面步骤验证轴向并精化 RPY。
 
 ### Step 2.1 — 判断 IMU 安装姿态
 
@@ -144,20 +144,9 @@ ros2 topic echo /imu/data_raw --field linear_acceleration
 
 把车**慢慢推一下向前**，看 `linear_acceleration.x` 是不是正的。如果是负的，IMU X 轴朝后，加 `yaw = π`。
 
-### Step 2.2 — 补 `base_link → imu_link` 静态 TF
+### Step 2.2 — 精化 `base_link → imu_link` 静态 TF
 
-在 `src/mentorpi_bringup/launch/mentorpi.launch.py` 的 `LaunchDescription` 列表中加：
-
-```python
-Node(
-    package='tf2_ros',
-    executable='static_transform_publisher',
-    name='base_to_imu',
-    arguments=['0.0', '0.0', '0.05',   # x y z (实测)
-               '0', '0', '0',           # yaw pitch roll (按 Step 2.1 判断)
-               'base_link', 'imu_link'],
-),
-```
+TF 已存在于 `src/mentorpi_bringup/launch/base.launch.py`（`base_to_imu` 节点，当前 z=0.05、零旋转）。按 Step 2.1 的判断修改其 RPY 参数；平移用尺子量控制板位置填入（平移对 gyro/orientation 融合几乎无影响，轴向对齐才关键）。
 
 ### Step 2.3 — Gyro bias
 
@@ -187,7 +176,7 @@ ros2 topic echo /imu/data_raw --field angular_velocity > /tmp/gyro.log
 
 ## Part 3 — Gemini 2L 相机外参标定
 
-校准 `src/mentorpi_bringup/launch/rtabmap_mapping.launch.py` 中 `base_to_camera` 静态 TF（当前是占位估计值 x=0.05, z=0.15, 无旋转）。
+校准 `src/mentorpi_bringup/launch/base.launch.py` 中 `base_to_camera` 静态 TF（当前是占位估计值 x=0.05, z=0.15, 无旋转；相机现在常驻 base，不在 rtabmap launch 里）。
 
 **方法选择：AprilTag（精标方法 B）+ 后续自研标定工具**
 

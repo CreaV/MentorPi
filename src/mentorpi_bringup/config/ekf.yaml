@@ -10,22 +10,28 @@ ekf_filter_node:
     base_link_frame: base_link
     world_frame: odom
 
-    # Odometry from base_node (cmd_vel dead-reckoning)
+    # Odometry from base_node (cmd_vel dead-reckoning, no encoders).
+    # Only vx/vy: the commanded yaw rate is the least trustworthy signal on a
+    # mecanum base (in-place rotation slips the most) and fusing it alongside
+    # the gyro double-counted yaw. Twist covariances come from base_node
+    # (inflated while moving, tight when stopped).
     odom0: /odom
     odom0_config: [false, false, false,   # x, y, z
                    false, false, false,    # roll, pitch, yaw
                    true,  true,  false,    # vx, vy, vz
-                   false, false, true,     # vroll, vpitch, vyaw
+                   false, false, false,    # vroll, vpitch, vyaw
                    false, false, false]    # ax, ay, az
 
-    # IMU (filtered, with orientation)
+    # IMU: fuse the gyro yaw rate directly (lowest latency, unbiased by wheel
+    # slip). Not the Madgwick yaw: differential-yaw + vyaw double-counted the
+    # same gyro, and absolute yaw has no magnetometer reference anyway.
     imu0: /imu/data
     imu0_config: [false, false, false,   # x, y, z
-                  false, false, true,     # roll, pitch, yaw
+                  false, false, false,    # roll, pitch, yaw
                   false, false, false,    # vx, vy, vz
                   false, false, true,     # vroll, vpitch, vyaw
                   false, false, false]    # ax, ay, az
-    imu0_differential: true
+    imu0_differential: false
     imu0_relative: false
     imu0_remove_gravitational_acceleration: true
 

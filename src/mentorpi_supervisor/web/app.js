@@ -101,6 +101,7 @@ function labelOf(mode) {
     slam_2d: '2D SLAM',
     slam_3d: '3D SLAM',
     loc_2d: 'LOC 2D',
+    loc_3d: 'LOC 3D',
   })[mode] || mode || '…';
 }
 
@@ -185,14 +186,17 @@ function setupModeButtons() {
   $$('.mode-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
       const m = btn.dataset.mode;
-      if (m === 'loc_2d') openMapSheet();
+      if (m === 'loc_2d' || m === 'loc_3d') openMapSheet(m);
       else callSetMode(m);
     });
   });
 }
 
 // ---- map sheet ----
-function openMapSheet() {
+let sheetMode = 'loc_2d'; // which localization mode the sheet is picking for
+function openMapSheet(mode) {
+  sheetMode = mode;
+  $('#map-sheet-title').textContent = mode === 'loc_3d' ? 'Choose 3D map (.db)' : 'Choose 2D map';
   $('#map-sheet').hidden = false;
   refreshMaps();
 }
@@ -206,7 +210,7 @@ function refreshMaps() {
   const srv = new ROSLIB.Service({
     ros, name: LIST_MAPS_SRV, serviceType: 'mentorpi_msgs/srv/ListMaps',
   });
-  srv.callService(new ROSLIB.ServiceRequest({ mode: 'loc_2d' }), (res) => {
+  srv.callService(new ROSLIB.ServiceRequest({ mode: sheetMode }), (res) => {
     renderMaps(res.maps || []);
   }, (err) => {
     list.innerHTML = `<li class="empty">error: ${err}</li>`;
@@ -215,7 +219,9 @@ function refreshMaps() {
 function renderMaps(maps) {
   const list = $('#map-list');
   if (!maps.length) {
-    list.innerHTML = '<li class="empty">no maps in ~/maps/ — build one with 2D SLAM first</li>';
+    list.innerHTML = sheetMode === 'loc_3d'
+      ? '<li class="empty">no .db in ~/rtabmap_maps/ — build one with 3D SLAM first</li>'
+      : '<li class="empty">no maps in ~/maps/ — build one with 2D SLAM first</li>';
     return;
   }
   list.innerHTML = '';
@@ -224,7 +230,9 @@ function renderMaps(maps) {
     li.textContent = m;
     li.addEventListener('click', () => {
       closeMapSheet();
-      callSetMode('loc_2d', m);
+      // loc_2d takes map_file, loc_3d takes database_path
+      if (sheetMode === 'loc_3d') callSetMode('loc_3d', '', m);
+      else callSetMode('loc_2d', m);
     });
     list.appendChild(li);
   });

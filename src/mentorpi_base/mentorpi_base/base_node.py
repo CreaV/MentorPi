@@ -96,7 +96,18 @@ class MentorPiBase(Node):
         self.cmd_vx = 0.0
         self.cmd_vy = 0.0
         self.cmd_wz = 0.0
+        # Ramped (estimated actual) velocity: cmd_vel is a step, the chassis is
+        # not — integrating the step over-counts distance at every start/stop.
+        self.est_vx = 0.0
+        self.est_vy = 0.0
+        self.est_wz = 0.0
         self.last_odom_time = self.get_clock().now()
+
+        # Max chassis accel used for the odom ramp model (0 = integrate raw cmd)
+        self.declare_parameter('accel_limit_linear', 1.5)    # m/s^2
+        self.declare_parameter('accel_limit_angular', 10.0)  # rad/s^2
+        self.accel_limit_linear = self.get_parameter('accel_limit_linear').value
+        self.accel_limit_angular = self.get_parameter('accel_limit_angular').value
 
         self.declare_parameter('publish_odom_tf', False)
         self.publish_odom_tf = self.get_parameter('publish_odom_tf').value
@@ -246,14 +257,33 @@ class MentorPiBase(Node):
             data.extend(struct.pack("<Bf", int(motor_id - 1), float(speed)))
         self.send_packet(FUNC_MOTOR, data)
 
+    @staticmethod
+    def _ramp(current, target, max_delta):
+        if max_delta <= 0.0:
+            return target
+        delta = target - current
+        if delta > max_delta:
+            delta = max_delta
+        elif delta < -max_delta:
+            delta = -max_delta
+        return current + delta
+
     def odom_timer_callback(self):
         now = self.get_clock().now()
         dt = (now - self.last_odom_time).nanoseconds / 1e9
         self.last_odom_time = now
+        # Guard against scheduler hiccups blowing up a single integration step
+        dt = min(dt, 0.1)
 
-        vx = self.cmd_vx
-        vy = self.cmd_vy
-        wz = self.cmd_wz
+        # First-order chassis response: slew estimated velocity toward the
+        # commanded one instead of assuming the step is reached instantly.
+        self.est_vx = self._ramp(self.est_vx, self.cmd_vx, self.accel_limit_linear * dt)
+        self.est_vy = self._ramp(self.est_vy, self.cmd_vy, self.accel_limit_linear * dt)
+        self.est_wz = self._ramp(self.est_wz, self.cmd_wz, self.accel_limit_angular * dt)
+
+        vx = self.est_vx
+        vy = self.est_vy
+        wz = self.est_wz
 
         # Dead-reckoning: rotate body-frame velocity to world frame
         self.pose_x += (vx * math.cos(self.pose_yaw) - vy * math.sin(self.pose_yaw)) * dt
@@ -286,15 +316,25 @@ class MentorPiBase(Node):
         odom.twist.twist.linear.x = vx
         odom.twist.twist.linear.y = vy
         odom.twist.twist.angular.z = wz
-        # Covariance: low when stopped, higher when moving (dead-reckoning drift)
-        if vx == 0.0 and vy == 0.0 and wz == 0.0:
-            odom.pose.covariance[0] = 1e-9
-            odom.pose.covariance[7] = 1e-9
-            odom.pose.covariance[35] = 1e-9
+        # Covariance: low when stopped, higher when moving (dead-reckoning drift).
+        # The EKF fuses the TWIST (vx/vy/vyaw), so twist covariance is the one
+        # that matters — leaving it at 0 makes robot_localization treat the
+        # commanded velocity as ground truth. There is no encoder feedback, so
+        # while moving these are honest "open-loop mecanum" numbers: strafe
+        # (vy) slips more than forward (vx), in-place rotation (vyaw) slips
+        # worst; the gyro should dominate yaw in the EKF.
+        moving = not (vx == 0.0 and vy == 0.0 and wz == 0.0
+                      and self.cmd_vx == 0.0 and self.cmd_vy == 0.0 and self.cmd_wz == 0.0)
+        if moving:
+            pose_var, var_vx, var_vy, var_wz = 1e-3, 0.02, 0.05, 0.2
         else:
-            odom.pose.covariance[0] = 1e-3
-            odom.pose.covariance[7] = 1e-3
-            odom.pose.covariance[35] = 1e-3
+            pose_var, var_vx, var_vy, var_wz = 1e-9, 1e-6, 1e-6, 1e-6
+        odom.pose.covariance[0] = pose_var
+        odom.pose.covariance[7] = pose_var
+        odom.pose.covariance[35] = pose_var
+        odom.twist.covariance[0] = var_vx    # vx
+        odom.twist.covariance[7] = var_vy    # vy
+        odom.twist.covariance[35] = var_wz   # vyaw
         self.odom_pub.publish(odom)
 
     def cmd_vel_callback(self, msg):

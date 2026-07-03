@@ -66,6 +66,11 @@ def stamp_seconds(stamp) -> float:
     return float(stamp.sec) + float(stamp.nanosec) * 1e-9
 
 
+def set_ros_time(seconds: float) -> None:
+    # Rerun >= 0.21 dropped set_time_seconds in favour of set_time(timestamp=...).
+    rr.set_time("ros_time", timestamp=seconds)
+
+
 def transform_components(tf):
     t = tf.transform.translation
     q = tf.transform.rotation
@@ -97,7 +102,7 @@ def handle_tf(msg, tree: FrameTree, *, static: bool) -> None:
         if static:
             rr.log(path, xform, static=True)
         else:
-            rr.set_time_seconds("ros_time", stamp_seconds(tf.header.stamp))
+            set_ros_time(stamp_seconds(tf.header.stamp))
             rr.log(path, xform)
 
 
@@ -125,7 +130,7 @@ def handle_image(msg, tree: FrameTree, kind: str) -> None:
     base = tree.path(frame)
     if base is None:
         return
-    rr.set_time_seconds("ros_time", stamp_seconds(msg.header.stamp))
+    set_ros_time(stamp_seconds(msg.header.stamp))
     h, w = int(msg.height), int(msg.width)
     enc = msg.encoding.lower() if isinstance(msg.encoding, str) else msg.encoding
 
@@ -171,7 +176,7 @@ def handle_laser_scan(msg, tree: FrameTree) -> None:
         [ranges * np.cos(angles), ranges * np.sin(angles), np.zeros_like(ranges)],
         axis=1,
     )
-    rr.set_time_seconds("ros_time", stamp_seconds(msg.header.stamp))
+    set_ros_time(stamp_seconds(msg.header.stamp))
     rr.log(
         base + "/scan",
         rr.Points3D(points, colors=[230, 200, 40], radii=0.02),
@@ -179,31 +184,31 @@ def handle_laser_scan(msg, tree: FrameTree) -> None:
 
 
 def handle_imu(msg, ns: str) -> None:
-    rr.set_time_seconds("ros_time", stamp_seconds(msg.header.stamp))
+    set_ros_time(stamp_seconds(msg.header.stamp))
     a = msg.linear_acceleration
     g = msg.angular_velocity
-    rr.log(f"/diagnostics/{ns}/accel/x", rr.Scalar(a.x))
-    rr.log(f"/diagnostics/{ns}/accel/y", rr.Scalar(a.y))
-    rr.log(f"/diagnostics/{ns}/accel/z", rr.Scalar(a.z))
-    rr.log(f"/diagnostics/{ns}/gyro/x", rr.Scalar(g.x))
-    rr.log(f"/diagnostics/{ns}/gyro/y", rr.Scalar(g.y))
-    rr.log(f"/diagnostics/{ns}/gyro/z", rr.Scalar(g.z))
+    rr.log(f"/diagnostics/{ns}/accel/x", rr.Scalars(a.x))
+    rr.log(f"/diagnostics/{ns}/accel/y", rr.Scalars(a.y))
+    rr.log(f"/diagnostics/{ns}/accel/z", rr.Scalars(a.z))
+    rr.log(f"/diagnostics/{ns}/gyro/x", rr.Scalars(g.x))
+    rr.log(f"/diagnostics/{ns}/gyro/y", rr.Scalars(g.y))
+    rr.log(f"/diagnostics/{ns}/gyro/z", rr.Scalars(g.z))
     # If orientation is populated (Madgwick output), expose the quaternion magnitude
     # so we can spot dropouts; the actual orientation is already in the TF tree.
     if msg.orientation_covariance[0] >= 0.0:
         q = msg.orientation
         rr.log(
             f"/diagnostics/{ns}/orientation_norm",
-            rr.Scalar(float(np.sqrt(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w))),
+            rr.Scalars(float(np.sqrt(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w))),
         )
 
 
 def handle_odometry(msg, ns: str, traj_buf: Optional[list]) -> None:
-    rr.set_time_seconds("ros_time", stamp_seconds(msg.header.stamp))
+    set_ros_time(stamp_seconds(msg.header.stamp))
     v = msg.twist.twist
-    rr.log(f"/diagnostics/{ns}/v_lin/x", rr.Scalar(v.linear.x))
-    rr.log(f"/diagnostics/{ns}/v_lin/y", rr.Scalar(v.linear.y))
-    rr.log(f"/diagnostics/{ns}/v_ang/z", rr.Scalar(v.angular.z))
+    rr.log(f"/diagnostics/{ns}/v_lin/x", rr.Scalars(v.linear.x))
+    rr.log(f"/diagnostics/{ns}/v_lin/y", rr.Scalars(v.linear.y))
+    rr.log(f"/diagnostics/{ns}/v_ang/z", rr.Scalars(v.angular.z))
     if traj_buf is not None:
         p = msg.pose.pose.position
         traj_buf.append([p.x, p.y, p.z])
@@ -220,10 +225,10 @@ def handle_odometry(msg, ns: str, traj_buf: Optional[list]) -> None:
 
 def handle_cmd_vel(msg, t_seconds: float) -> None:
     # Twist has no header — use the bag-receive timestamp.
-    rr.set_time_seconds("ros_time", t_seconds)
-    rr.log("/diagnostics/cmd_vel/v_lin/x", rr.Scalar(msg.linear.x))
-    rr.log("/diagnostics/cmd_vel/v_lin/y", rr.Scalar(msg.linear.y))
-    rr.log("/diagnostics/cmd_vel/v_ang/z", rr.Scalar(msg.angular.z))
+    set_ros_time(t_seconds)
+    rr.log("/diagnostics/cmd_vel/v_lin/x", rr.Scalars(msg.linear.x))
+    rr.log("/diagnostics/cmd_vel/v_lin/y", rr.Scalars(msg.linear.y))
+    rr.log("/diagnostics/cmd_vel/v_ang/z", rr.Scalars(msg.angular.z))
 
 
 # ---------- main ---------------------------------------------------------
@@ -248,13 +253,31 @@ def main() -> int:
     if args.save:
         rr.save(args.save)
 
-    # ROS REP-103: x forward, y left, z up.
-    rr.log("/", rr.ViewCoordinates.RIGHT_HAND_Z_UP, static=True)
+    # ROS REP-103 ground convention: X forward, Y left, Z up.
+    rr.log("/", rr.ViewCoordinates.FLU, static=True)
 
     tree = FrameTree()
     odom_traj: list[list[float]] = []
     seen: dict[str, int] = {}
 
+    # ---- Pass 1: build the full TF parent map ----
+    # Static TF messages are emitted in arbitrary order (orbbec driver publishes
+    # `camera_link → camera_depth_frame` AFTER the deeper optical frames). If we
+    # logged Transform3D on the fly while the chain is partial, the static
+    # Transform3Ds land at orphan paths and the camera ends up disconnected from
+    # base_link, so back-projected depth points go to world +Z.
+    print("scanning TF tree...")
+    with AnyReader([bag_path]) as reader:
+        tf_conns = [c for c in reader.connections
+                    if c.topic in ("/tf_static", "/tf")]
+        for conn, _t, raw in reader.messages(connections=tf_conns):
+            msg = reader.deserialize(raw, conn.msgtype)
+            for tf in msg.transforms:
+                tree.set_parent(clean_frame(tf.child_frame_id),
+                                clean_frame(tf.header.frame_id))
+    print(f"  resolved {len(tree.parent_of)} frames")
+
+    # ---- Pass 2: log everything ----
     with AnyReader([bag_path]) as reader:
         topic_types = {c.topic: c.msgtype for c in reader.connections}
         print("topics in bag:")

@@ -104,6 +104,18 @@ def generate_launch_description():
             arguments=['0', '0', '0.18', '0', '0', '0', 'base_link', 'laser_frame'],
         ),
 
+        # base_link -> imu_link (STM32 IMU on the controller board). Without
+        # this TF robot_localization cannot transform /imu/data (frame_id
+        # 'imu_link') into base_link and silently drops every IMU measurement.
+        # Translation barely matters for gyro/orientation fusion; axis
+        # alignment does — adjust RPY here if the board is mounted rotated.
+        Node(
+            package='tf2_ros',
+            executable='static_transform_publisher',
+            name='base_to_imu',
+            arguments=['0', '0', '0.05', '0', '0', '0', 'base_link', 'imu_link'],
+        ),
+
         # base_link -> camera_link (placeholder extrinsic; needs calibration).
         # Lives in base because the camera is now always running.
         Node(
