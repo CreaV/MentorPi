@@ -490,6 +490,8 @@ unit 文件在 `scripts/mentorpi-remote.service`,关键点:
 
 ## Known Issues
 
+**USB 过流导致外设集体掉线(遥控一段时间后崩溃)** — 根因、供电拓扑、台架持续调试配置见 `docs/power_troubleshooting.md`。
+
 ### STM32 蜂鸣器在 Pi 接官方 PSU 时持续 5 声循环报警
 
 **症状**:Pi 由 STM32 共享的 Type-C 供电时一切正常;改用官方原装 PSU 单独给 Pi 供电后,STM32 蜂鸣器开始 5 声 × 1 秒循环报警。SDK 主机侧不发任何 5 声序列(已 grep 确认),所以这是 STM32 固件本身的报警。
