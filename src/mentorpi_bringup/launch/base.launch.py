@@ -126,13 +126,15 @@ def generate_launch_description():
             arguments=['0', '0', '0.05', '0', '0', '0', 'base_link', 'imu_link'],
         ),
 
-        # base_link -> camera_link (placeholder extrinsic; needs calibration).
-        # Lives in base because the camera is now always running.
+        # base_link -> camera_link. 尺子粗标 2026-07-05: 外壳中心距轮轴
+        # 中点前方 14.3cm、离地 9.5cm、无俯仰。镜头光心级精度由 orbbec
+        # driver 的出厂标定 TF (camera_link -> *_optical_frame) 负责,
+        # 残余误差待 AprilTag 精标 (docs/calibration.md Part 3)。
         Node(
             package='tf2_ros',
             executable='static_transform_publisher',
             name='base_to_camera',
-            arguments=['0.05', '0', '0.15', '0', '0', '0', 'base_link', 'camera_link'],
+            arguments=['0.143', '0', '0.095', '0', '0', '0', 'base_link', 'camera_link'],
         ),
 
         # MS200 lidar
