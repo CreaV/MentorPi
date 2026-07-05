@@ -74,10 +74,13 @@
 
 ## 3. 本次改动的实车验证（代码已完成，未上车）
 
-- [ ] Pi 上 `colcon build` + 重启 `remote.launch.py`。
-- [ ] 确认 IMU 真正进入 EKF：`ros2 run tf2_ros tf2_echo base_link imu_link`
-      有输出、`/odometry/filtered` 的 yaw 在原地转动时跟手（此前缺 TF 时
-      robot_localization 静默丢弃 IMU）。
+- [x] Pi 上 `colcon build` + 重启 `remote.launch.py`。（2026-07-05）
+- [x] 确认 IMU 真正进入 EKF：`tf2_echo base_link imu_link` 有输出、
+      `/odometry/filtered` 45Hz、`/imu/data` 49Hz。（2026-07-05）
+- [x] 运动原语 + 语音链路端到端：`robot_cli.py ws://raspberrypi5:9090
+      rotate ±90`（gyro 闭环误差 0.2°）、`move forward/backward 0.3`
+      （odom 计 0.291m，~3% 待轮径标定）、`stop` 服务。期间修掉 teleop
+      零流争用 /cmd_vel bug + rosbridge 改为默认常驻。（2026-07-05）
 - [ ] slam_3d 带 lidar 融合**重新建图**（旧 rtabmap.db 里没有 scan 数据，
       NeighborLinkRefining 对旧图不生效），对比建图质量。
 - [ ] loc_3d 重定位实测：重启 → 手机点 Loc 3D 选 .db → 移动到有纹理区域
