@@ -81,23 +81,44 @@
       rotate ±90`（gyro 闭环误差 0.2°）、`move forward/backward 0.3`
       （odom 计 0.291m，~3% 待轮径标定）、`stop` 服务。期间修掉 teleop
       零流争用 /cmd_vel bug + rosbridge 改为默认常驻。（2026-07-05）
-- [ ] slam_3d 带 lidar 融合**重新建图**（旧 rtabmap.db 里没有 scan 数据，
-      NeighborLinkRefining 对旧图不生效），对比建图质量。
-- [ ] loc_3d 重定位实测：重启 → 手机点 Loc 3D 选 .db → 移动到有纹理区域
-      → 确认 `map→odom` TF 出现、位姿正确。
+- [x] slam_3d 带 lidar 融合**重新建图**：484 位姿、49 视觉回环 + 219 激光
+      近邻链接（融合实战生效）、~15m 路径、160MB db。（2026-07-05）
+- [x] loc_3d 重定位实测：重启后锁定 map→base_link=(−0.98, −1.03)。注意
+      手搬机器人 = 绑架，需重启模式清 odom cache。（2026-07-05）
 
-## 4. 高斯泼溅管线端到端（工具已完成并本地测过导出，未跑训练）
+## 4. 高斯泼溅管线端到端
 
-- [ ] 新图导出：`python3 scripts/export_gs_dataset.py ~/rtabmap_maps/xxx.db
-      --output-dir ~/gs_dataset`，拷到训练服务器。
-- [ ] 服务器 `ns-train splatfacto`（**必须** `--orientation-method none
-      --center-method none --auto-scale-poses False`）→ `ns-export
-      gaussian-splat` 得 splat.ply。
-- [ ] 对齐自检：`live_rerun.py --splat splat.ply --cloud rtabmap_cloud.ply`
-      两者应完全重合；不重合 = 训练时自动重定向没关。
-- [ ] 手机端 `--serve` 实测（同一局域网浏览器打开打印的 URL）。
-- [ ] 跟进 Rerun 原生 3DGS 渲染支持，落地后替换 live_rerun.py 的点云
-      fallback（实体路径不变，只换 log 调用）。
+- [x] 导出：186 帧 + 种子点云（`gs_work/gs_dataset_full/`）。（2026-07-05）
+- [x] 训练：**本机 RTX 4070 SUPER 直接可训**（venv 在
+      `/media/luo/Game/venvs/nerfstudio`，NTFS 上可运行；ninja 需在 PATH；
+      导出 checkpoint 需 `TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1`）→
+      `gs_work/exports/splat/splat.ply`（47.3 万高斯）。（2026-07-05）
+- [x] 查看端：`live_rerun.py --splat --cloud --serve` 双层显示，splat 与
+      SLAM 点云对齐确认。web viewer URL 里 `+` 必须编码为 `%2B`。（2026-07-05）
+- [ ] **最终合体验证**（电池没电中断，明天第一件事）：hub 供电拓扑下重启
+      → loc_3d 锁定 → Rerun 里实时机器人 + 相机视锥出现在 splat 场景。
+- [ ] 手机端 `--serve` 实测。
+- [ ] 跟进 Rerun 原生 3DGS 渲染支持，落地后替换点云 fallback。
+
+## 4.5 今日遗留问题（2026-07-05 晚，按优先级）
+
+- [ ] **验证 USB hub 供电拓扑**：相机已确认挂 hub 5000M 链路 ✓；跑一段
+      遥控看 `journalctl -k -f | grep over-current` 是否清零；雷达是
+      串口供电（不走 USB 5V，之前的功率账要修正）。
+- [ ] **supervisor 开机死锁**（一次复现）：18:00 boot 实例发完 startup
+      chime 后主线程 futex 死锁，服务调用永挂。当时带
+      ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST（已撤销），可能相关。
+      加锁超时日志/看门狗自愈；观察是否复发。
+- [ ] **WiFi 掉线**（~6 次/天，power_save=off、信号 −37dBm、无欠压
+      throttled=0x0、无驱动报错）：嫌疑=路由器踢客户端或 brcmfmac 软挂。
+      判别：掉线时用手机 ping 192.168.8.117。**台架调试建议直接插网线**。
+      DDS 抗断网方案：FastDDS interface whitelist XML（LOCALHOST 环境
+      变量已证伪，会弄坏图像话题/action/supervisor）。
+- [ ] **相机 USB 卡死恢复路径**：usbreset 有时无效需冷启；考虑在
+      supervisor 或 systemd watchdog 里加自动恢复(检测 openUsbDevice
+      failed → usbreset → 容器重启)。
+- [ ] STM32 电源开关状态检查提示：/battery ≈4.4V + IMU 活 + 电机不转 =
+      开关没开（见 docs/power_troubleshooting.md）。
 
 ## 5. 部署 / 安全
 
