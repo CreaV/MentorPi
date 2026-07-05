@@ -1,5 +1,6 @@
 import rclpy
 from rclpy.node import Node
+from rcl_interfaces.msg import SetParametersResult
 from geometry_msgs.msg import Twist, TransformStamped, Quaternion
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import Imu, BatteryState
@@ -118,11 +119,14 @@ class MentorPiBase(Node):
         self.declare_parameter('wheel_diameter', 0.0636)
         self.wheel_diameter = self.get_parameter('wheel_diameter').value
 
-        # 麦轮横移尺度: 滚轮几何导致横移等效轮径 != 纵向, 卷尺标定
-        # 2026-07-05: 指令 1m 实走 ~1.148m -> vy 预缩 0.868。只作用于
-        # 电机指令, odom 积分仍用原始 cmd (物理 = 指令 = odom)。
-        self.declare_parameter('vy_scale', 0.868)
+        # 麦轮横移尺度(只作用于电机指令, odom 积分仍用原始 cmd)。
+        # 卷尺标定 2026-07-05: 首测 1.148m/1m 是坏数据(航向保持关闭+
+        # 单轮参考系); 复测(航向保持开)原生增益 ≈1.005 -> 保持 1.0。
+        self.declare_parameter('vy_scale', 1.0)
         self.vy_scale = self.get_parameter('vy_scale').value
+
+        # 标定参数支持运行时 ros2 param set 即时生效(微调不用重启)。
+        self.add_on_set_parameters_callback(self._on_param_update)
 
         self.declare_parameter('publish_odom_tf', False)
         self.publish_odom_tf = self.get_parameter('publish_odom_tf').value
@@ -385,6 +389,24 @@ class MentorPiBase(Node):
         odom.twist.covariance[7] = var_vy    # vy
         odom.twist.covariance[35] = var_wz   # vyaw
         self.odom_pub.publish(odom)
+
+    def _on_param_update(self, params):
+        # 标定参数运行时热更新 (ros2 param set /mentorpi_base ...)
+        # 必须为正: 轮径/横移尺度。允许 0 (=关闭斜坡): accel_limit_*。
+        positive = {'wheel_diameter', 'vy_scale'}
+        non_negative = {'accel_limit_linear', 'accel_limit_angular'}
+        for p in params:
+            if p.name not in positive | non_negative:
+                continue
+            if not isinstance(p.value, float):
+                return SetParametersResult(
+                    successful=False, reason=f'{p.name} must be a float')
+            if p.value <= 0.0 and p.name in positive or p.value < 0.0:
+                return SetParametersResult(
+                    successful=False, reason=f'{p.name} out of range')
+            setattr(self, p.name, p.value)
+            self.get_logger().info(f'param {p.name} -> {p.value}')
+        return SetParametersResult(successful=True)
 
     def cmd_vel_callback(self, msg):
         # 麦克纳姆轮逆运动学 (官方参数)
