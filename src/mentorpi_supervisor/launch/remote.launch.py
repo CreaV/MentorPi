@@ -5,9 +5,9 @@ Brings up:
   - base.launch.py             (always-on hardware + Gemini 2L)
   - mentorpi_supervisor        (mode switcher: /mode/set, /mode/list_maps, /mode/status)
   - foxglove_bridge      :8765 (ws -- desktop Foxglove Studio clients)
-  - rosbridge_websocket  :9090 (ws -- mobile/tablet roslibjs SPA)
-  - web_video_server     :8081 (http MJPEG -- browser <img> tag)
-  - http.server          :8000 (http static -- the SPA itself)
+  - rosbridge_websocket  :9090 (ws -- AIRE voice skill, live_rerun.py, mobile SPA)
+  - web_video_server     :8081 (http MJPEG -- browser <img> tag, needs enable_mobile_spa)
+  - http.server          :8000 (http static -- the SPA itself, needs enable_mobile_spa)
 
 Mobile/tablet flow:
   Browser -> http://<robot-ip>:8000/  -> SPA pulls assets, opens
@@ -35,12 +35,14 @@ def generate_launch_description():
 
     return LaunchDescription([
         # Foxglove Studio is the primary client and runs by default.
-        # The custom mobile SPA stack (rosbridge + web_video_server + static
-        # http.server) is dormant unless explicitly enabled with
-        # `enable_mobile_spa:=true`. Code path is preserved for the future
-        # high-performance custom client work.
+        # rosbridge (:9090) also runs by default: it is no longer just the
+        # mobile SPA transport -- the AIRE voice skill (robot.* tools) and
+        # scripts/live_rerun.py both depend on it.
+        # The rest of the mobile SPA stack (web_video_server + static
+        # http.server) stays dormant unless enabled with
+        # `enable_mobile_spa:=true`.
         DeclareLaunchArgument('enable_mobile_spa', default_value='false',
-            description='Start rosbridge_websocket + web_video_server + SPA HTTP server'),
+            description='Start web_video_server + SPA HTTP server (mobile client)'),
 
         DeclareLaunchArgument('foxglove_port', default_value='8765',
             description='foxglove_bridge websocket port'),
@@ -99,7 +101,6 @@ def generate_launch_description():
                 'max_message_size': 10000000,
                 'call_services_in_new_thread': True,
             }],
-            condition=IfCondition(enable_mobile_spa),
         ),
 
         Node(
