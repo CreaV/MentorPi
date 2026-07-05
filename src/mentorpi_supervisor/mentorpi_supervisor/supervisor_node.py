@@ -211,14 +211,21 @@ class SupervisorNode(Node):
             self._proc = None
             return
 
-        # Give ros2 launch time to shut nodes down gracefully.
+        # Give ros2 launch time to shut nodes down gracefully. rtabmap
+        # flushes its whole database on shutdown — a 160MB db takes well
+        # over 10s on the Pi's SD card, and killing it mid-save corrupts
+        # the visual word dictionary (loadWordsQuery 0 words, relocation
+        # permanently broken — observed 2026-07-05). 3D modes get a long
+        # grace period; SIGKILL only as the very last resort.
+        sigint_grace = 90 if self._current_mode in ('slam_3d', 'loc_3d') else 10
         try:
-            proc.wait(timeout=10)
+            proc.wait(timeout=sigint_grace)
         except subprocess.TimeoutExpired:
-            self.get_logger().warn('launch did not exit on SIGINT, sending SIGTERM')
+            self.get_logger().warn(
+                f'launch did not exit {sigint_grace}s after SIGINT, sending SIGTERM')
             try:
                 os.killpg(proc.pid, signal.SIGTERM)
-                proc.wait(timeout=5)
+                proc.wait(timeout=15)
             except (ProcessLookupError, subprocess.TimeoutExpired):
                 self.get_logger().error('launch unresponsive, sending SIGKILL')
                 try:
