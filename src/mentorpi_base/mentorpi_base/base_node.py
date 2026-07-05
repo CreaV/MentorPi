@@ -113,6 +113,11 @@ class MentorPiBase(Node):
         self.accel_limit_linear = self.get_parameter('accel_limit_linear').value
         self.accel_limit_angular = self.get_parameter('accel_limit_angular').value
 
+        # 轮径: 标称 0.065, 卷尺标定 2026-07-05 (3x 1m 直线, odom 均值
+        # 0.9935 vs 实测 0.98) 得尺度系数 0.9864 -> 0.0641。
+        self.declare_parameter('wheel_diameter', 0.0641)
+        self.wheel_diameter = self.get_parameter('wheel_diameter').value
+
         self.declare_parameter('publish_odom_tf', False)
         self.publish_odom_tf = self.get_parameter('publish_odom_tf').value
 
@@ -393,7 +398,7 @@ class MentorPiBase(Node):
 
         wheelbase = 0.1368      # 前后轴距
         track_width = 0.1410    # 左右轴距
-        wheel_diameter = 0.065  # 轮径
+        wheel_diameter = self.wheel_diameter  # 轮径(标定参数, 见 __init__)
 
         vp = wz * (wheelbase + track_width) / 2.0
 

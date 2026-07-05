@@ -59,6 +59,10 @@ class MotionNode(Node):
         self.declare_parameter('max_angular_distance', 12.6)   # rad (~2 turns)
         self.declare_parameter('odom_timeout', 0.5)            # s, stale odom abort
         self.declare_parameter('control_rate', 20.0)           # Hz
+        # 航向保持 (forward/strafe): 麦轮开环直行会因电机不均匀画弧
+        # (实测 1m 明显偏左), 用 EKF yaw (陀螺仪) 做 P 修正。
+        self.declare_parameter('heading_kp', 2.0)              # (rad/s)/rad
+        self.declare_parameter('heading_max_correction', 0.5)  # rad/s
 
         p = self.get_parameter
         self._default_speed = {
@@ -93,6 +97,8 @@ class MotionNode(Node):
         }
         self._odom_timeout = p('odom_timeout').value
         self._control_dt = 1.0 / p('control_rate').value
+        self._heading_kp = p('heading_kp').value
+        self._heading_max_corr = p('heading_max_correction').value
 
         # Latest odom sample (guarded by _odom_lock)
         self._odom_lock = threading.Lock()
@@ -255,6 +261,13 @@ class MotionNode(Node):
                     cmd.linear.y = v_cmd
                 else:
                     cmd.angular.z = v_cmd
+                if not rotate:
+                    # Heading hold: P-correct back to the yaw captured at
+                    # goal start, so open-loop motor imbalance can't arc.
+                    yaw_err = wrap_pi(start[2] - odom[2])
+                    corr = self._heading_kp * yaw_err
+                    cmd.angular.z = max(-self._heading_max_corr,
+                                        min(self._heading_max_corr, corr))
                 self._cmd_pub.publish(cmd)
 
                 if now - last_feedback > 0.2:
