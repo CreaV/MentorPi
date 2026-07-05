@@ -41,7 +41,9 @@ def generate_launch_description():
         'Icp/MaxTranslation': '0.5',
         'Icp/PointToPlane': 'false',
         'Rtabmap/DetectionRate': '2.0',
-        'RGBD/OptimizeMaxError': '3.0',
+        # 定位模式只读不写库, 门槛可以比建图松: 薄图(短扫描/少回环)下
+        # 3.0 会把仅略超阈值的正确定位也拒掉 (实测 3.11 被拒)。
+        'RGBD/OptimizeMaxError': '5.0',
         'Kp/MaxFeatures': '300',
         'Grid/Sensor': '2',
         'Grid/MaxGroundHeight': '0.05',
