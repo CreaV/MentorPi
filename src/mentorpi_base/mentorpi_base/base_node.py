@@ -113,10 +113,16 @@ class MentorPiBase(Node):
         self.accel_limit_linear = self.get_parameter('accel_limit_linear').value
         self.accel_limit_angular = self.get_parameter('accel_limit_angular').value
 
-        # 轮径: 标称 0.065, 卷尺标定 2026-07-05 (3x 1m 直线, odom 均值
-        # 0.9935 vs 实测 0.98) 得尺度系数 0.9864 -> 0.0641。
-        self.declare_parameter('wheel_diameter', 0.0641)
+        # 轮径: 标称 0.065, 卷尺标定 2026-07-05 两轮迭代 (3x 1m 粗标 0.9864
+        # -> 0.0641; 精读 0.983/0.9914 再乘 0.9915) -> 0.0636。
+        self.declare_parameter('wheel_diameter', 0.0636)
         self.wheel_diameter = self.get_parameter('wheel_diameter').value
+
+        # 麦轮横移尺度: 滚轮几何导致横移等效轮径 != 纵向, 卷尺标定
+        # 2026-07-05: 指令 1m 实走 ~1.148m -> vy 预缩 0.868。只作用于
+        # 电机指令, odom 积分仍用原始 cmd (物理 = 指令 = odom)。
+        self.declare_parameter('vy_scale', 0.868)
+        self.vy_scale = self.get_parameter('vy_scale').value
 
         self.declare_parameter('publish_odom_tf', False)
         self.publish_odom_tf = self.get_parameter('publish_odom_tf').value
@@ -387,12 +393,14 @@ class MentorPiBase(Node):
         #   +y-  |   |
         # motor2 |   | motor4
         vx = msg.linear.x
-        vy = msg.linear.y
+        # 横移标定预缩(见 __init__): 只作用于电机指令。odom 积分(下方
+        # capture)用原始指令 —— 预缩后物理位移 = 原始指令值。
+        vy = msg.linear.y * self.vy_scale
         wz = msg.angular.z
 
         # Capture for odometry dead-reckoning
         self.cmd_vx = vx
-        self.cmd_vy = vy
+        self.cmd_vy = msg.linear.y
         self.cmd_wz = wz
         self.last_cmd_vel_time = self.get_clock().now()
 

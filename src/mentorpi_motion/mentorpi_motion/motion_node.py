@@ -100,10 +100,21 @@ class MotionNode(Node):
         self._heading_kp = p('heading_kp').value
         self._heading_max_corr = p('heading_max_correction').value
 
+        # 里程计发散熔断: EKF (/odometry/filtered) 曾在串口过流掉线后
+        # 发散出 4.4m 假位移(2026-07-05), goal 追着假目标让车乱动。
+        # 对照原始 /odom (纯指令积分, 不经 EKF), 两者位移分家超阈值
+        # 立即停车。阈值放宽到远超正常打滑差异, 只拦真发散。
+        self.declare_parameter('raw_odom_topic', '/odom')
+        self.declare_parameter('divergence_linear', 0.5)   # m
+        self.declare_parameter('divergence_angular', 1.5)  # rad
+        self._div_linear = p('divergence_linear').value
+        self._div_angular = p('divergence_angular').value
+
         # Latest odom sample (guarded by _odom_lock)
         self._odom_lock = threading.Lock()
         self._odom = None            # (x, y, yaw)
         self._odom_mono = None       # time.monotonic() of last sample
+        self._raw_odom = None        # (x, y, yaw) from raw_odom_topic
 
         self._active_lock = threading.Lock()
         self._active = False
@@ -112,6 +123,9 @@ class MotionNode(Node):
         self._cmd_pub = self.create_publisher(Twist, p('cmd_vel_topic').value, 10)
         self.create_subscription(
             Odometry, p('odom_topic').value, self._odom_cb, 20,
+            callback_group=cb_group)
+        self.create_subscription(
+            Odometry, p('raw_odom_topic').value, self._raw_odom_cb, 20,
             callback_group=cb_group)
 
         self._server = ActionServer(
@@ -136,9 +150,19 @@ class MotionNode(Node):
                           yaw_from_quat(pose.orientation))
             self._odom_mono = time.monotonic()
 
+    def _raw_odom_cb(self, msg: Odometry):
+        pose = msg.pose.pose
+        with self._odom_lock:
+            self._raw_odom = (pose.position.x, pose.position.y,
+                              yaw_from_quat(pose.orientation))
+
     def _odom_snapshot(self):
         with self._odom_lock:
             return self._odom, self._odom_mono
+
+    def _raw_snapshot(self):
+        with self._odom_lock:
+            return self._raw_odom
 
     # ------- goal admission -------
 
@@ -212,6 +236,10 @@ class MotionNode(Node):
         start, _ = self._odom_snapshot()
         prev_yaw = start[2]
         traveled = 0.0
+        # Divergence guard baseline (None when raw odom absent, e.g. tests).
+        raw_start = self._raw_snapshot()
+        raw_prev_yaw = raw_start[2] if raw_start else 0.0
+        raw_traveled = 0.0
         v_cmd = 0.0
         t0 = time.monotonic()
         last_feedback = 0.0
@@ -242,6 +270,22 @@ class MotionNode(Node):
                 else:
                     traveled = self._traveled(goal.type, start, odom)
                 remaining = goal.distance - traveled
+
+                # Divergence guard: EKF vs raw cmd-integration odometry.
+                raw = self._raw_snapshot()
+                if raw_start is not None and raw is not None:
+                    if rotate:
+                        raw_traveled += wrap_pi(raw[2] - raw_prev_yaw)
+                        raw_prev_yaw = raw[2]
+                        diverged = abs(traveled - raw_traveled) > self._div_angular
+                    else:
+                        raw_traveled = self._traveled(goal.type, raw_start, raw)
+                        diverged = abs(traveled - raw_traveled) > self._div_linear
+                    if diverged:
+                        outcome = (False,
+                                   f'odometry divergence: ekf {traveled:+.2f} vs '
+                                   f'raw {raw_traveled:+.2f} — EKF unstable?')
+                        break
 
                 if abs(remaining) <= tol:
                     outcome = (True, 'done')
