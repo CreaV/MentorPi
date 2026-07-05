@@ -21,6 +21,14 @@ Environment=HOME=/home/pi
 # the system 3.12 (jazzy's rclpy C extension is built for 3.12).
 Environment=PATH=/usr/bin:/usr/local/bin:/opt/ros/jazzy/bin
 
+# Keep DDS on loopback only. All external clients (Foxglove, mobile SPA,
+# AIRE voice, live_rerun) go through the TCP bridges running on this Pi,
+# so DDS never needs wlan0 — and WiFi dropouts (observed several/day)
+# can no longer split the DDS graph mid-session (nodes stop hearing each
+# other until restarted). Trade-off: remote RViz2 over raw DDS no longer
+# works; use Foxglove instead.
+Environment=ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
+
 # WiFi power save causes several dropouts per day on this board; turn it
 # off before the stack starts. "+" = run as root, "-" = non-fatal if iw
 # is missing.
