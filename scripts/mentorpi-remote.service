@@ -1,7 +1,12 @@
 [Unit]
 Description=MentorPi remote operation (ROS 2 base + foxglove_bridge + supervisor)
-After=network.target
-Wants=network.target
+# network-online (not just network): DDS participants bind whatever
+# interfaces exist at process start. If the stack starts before wlan0
+# associates, boot-time nodes bind lo-only while later-spawned nodes
+# (supervisor mode switches) bind lo+wlan — discovery splits and topics
+# silently stop flowing between them (observed 2026-07-05).
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
@@ -15,6 +20,11 @@ Environment=HOME=/home/pi
 # Minimal PATH that excludes conda's bin so any nested `python3` resolves to
 # the system 3.12 (jazzy's rclpy C extension is built for 3.12).
 Environment=PATH=/usr/bin:/usr/local/bin:/opt/ros/jazzy/bin
+
+# WiFi power save causes several dropouts per day on this board; turn it
+# off before the stack starts. "+" = run as root, "-" = non-fatal if iw
+# is missing.
+ExecStartPre=-+/usr/sbin/iw dev wlan0 set power_save off
 
 # Use non-login non-interactive bash to avoid sourcing ~/.bashrc (which on this
 # box auto-activates miniforge and breaks rclpy imports).
