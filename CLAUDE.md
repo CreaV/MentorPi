@@ -297,10 +297,9 @@ ros2 launch mentorpi_bringup rtabmap_mapping.launch.py
 # 遥控机器人走一圈，地图自动保存到 ~/rtabmap_maps/rtabmap.db
 ```
 
-**注意:** 切换架构或频繁中断后 `rtabmap.db` 可能积累 word reference 错位(`addWordRef() Not found word`)。出现这类报错时备份并重建:
-```bash
-mv ~/rtabmap_maps/rtabmap.db ~/rtabmap_maps/rtabmap.db.bak
-```
+**增量建图(多会话)**:slam_3d 对已存在的 db 是**追加式**——同一个 `database_path` 再次进入即"续图",新旧会话靠回环合并。续图建议加 `load_all_nodes:=true`(旧图节点全载入 WM,开头即重定位合并,不用漂移等回环)。**建新图 = 传新文件名**(`database_path:=~/rtabmap_maps/room2.db`),不必手动备份旧库。
+
+**注意:** `addWordRef() Not found word` / `loadWordsQuery ... loaded words (0)` = 词典损坏(典型原因:落库中途被杀,supervisor 已加 90s 宽限防它)。修复:`rtabmap-reprocess corrupted.db repaired.db`(从库存图像重建词典,回环全保留);或备份重扫。
 
 ### Performance Tuning (Pi 5 实测)
 
