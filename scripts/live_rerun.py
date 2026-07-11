@@ -339,8 +339,14 @@ def main() -> int:
 
     rr.init("mentorpi_live")
     if args.serve:
+        # server_memory_limit 默认高达内存 75%: 服务端会攒下完整历史,
+        # 每个新连上的 viewer 都要从头回灌几分钟的旧数据才追上实时,
+        # 看起来就是"巨额延迟 + 在播过去"。64MB 只保留最近几十秒。
         try:
+            server_uri = rr.serve_grpc(server_memory_limit="64MB")
+        except TypeError:
             server_uri = rr.serve_grpc()
+        try:
             rr.serve_web_viewer(connect_to=server_uri)
         except AttributeError:
             rr.serve_web()  # rerun < 0.24 API
