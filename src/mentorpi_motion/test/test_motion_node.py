@@ -84,11 +84,9 @@ class Harness:
         self.thread = threading.Thread(target=self.executor.spin, daemon=True)
         self.thread.start()
         assert self.client.wait_for_server(timeout_sec=5.0)
-        # Wait until the motion node has fresh odom, or every goal is rejected.
-        deadline = time.monotonic() + 5.0
-        while self.motion._odom_snapshot()[0] is None:
-            assert time.monotonic() < deadline, 'motion node never received odom'
-            time.sleep(0.02)
+        # Odom subscriptions are lazy (created per-goal), so there is no
+        # warm-up to wait for here — _execute waits for the first odom
+        # message itself.
 
     def shutdown(self):
         self.executor.shutdown()

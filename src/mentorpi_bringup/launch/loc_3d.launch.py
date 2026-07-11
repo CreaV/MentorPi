@@ -86,23 +86,7 @@ def generate_launch_description():
             ],
         ),
 
-        # Live colored point cloud (preview only; the map itself is frozen).
-        Node(
-            package='rtabmap_util',
-            executable='point_cloud_xyzrgb',
-            name='point_cloud_xyzrgb',
-            output='screen',
-            parameters=[{
-                'approx_sync': True,
-                'decimation': 8,
-                'voxel_size': 0.10,
-                'max_depth': 5.0,
-            }],
-            remappings=[
-                ('rgb/image', '/camera/color/image_raw'),
-                ('rgb/camera_info', '/camera/color/camera_info'),
-                ('depth/image', '/camera/depth/image_raw'),
-                ('cloud', '/rtabmap/cloud'),
-            ],
-        ),
+        # 注: 定位模式不再起 point_cloud_xyzrgb —— 实时彩色点云只是预览,
+        # 观察定位用 /rtabmap/grid_map + /scan 贴合度更直观, 省 ~5% CPU。
+        # 需要实时点云时用 slam_3d 模式。
     ])

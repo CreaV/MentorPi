@@ -120,13 +120,15 @@ class MotionNode(Node):
         self._active = False
 
         cb_group = ReentrantCallbackGroup()
+        self._cb_group = cb_group
+        self._odom_topic = p('odom_topic').value
+        self._raw_odom_topic = p('raw_odom_topic').value
         self._cmd_pub = self.create_publisher(Twist, p('cmd_vel_topic').value, 10)
-        self.create_subscription(
-            Odometry, p('odom_topic').value, self._odom_cb, 20,
-            callback_group=cb_group)
-        self.create_subscription(
-            Odometry, p('raw_odom_topic').value, self._raw_odom_cb, 20,
-            callback_group=cb_group)
+
+        # 里程计订阅是懒加载的: 只在 goal 执行期间订阅。常驻订阅 2 路
+        # 50Hz 会让 rclpy 执行器空闲时也烧 ~38% CPU (Pi 5 实测), 抢走
+        # SLAM 的算力; motion 空闲占比 99%, 不值得。
+        self._sub_handles: list = []
 
         self._server = ActionServer(
             self, MotionPrimitive, 'motion/primitive',
@@ -164,6 +166,27 @@ class MotionNode(Node):
         with self._odom_lock:
             return self._raw_odom
 
+    def _start_subs(self) -> None:
+        if self._sub_handles:
+            return
+        self._sub_handles = [
+            self.create_subscription(
+                Odometry, self._odom_topic, self._odom_cb, 20,
+                callback_group=self._cb_group),
+            self.create_subscription(
+                Odometry, self._raw_odom_topic, self._raw_odom_cb, 20,
+                callback_group=self._cb_group),
+        ]
+
+    def _stop_subs(self) -> None:
+        for s in self._sub_handles:
+            self.destroy_subscription(s)
+        self._sub_handles = []
+        with self._odom_lock:
+            self._odom = None
+            self._odom_mono = None
+            self._raw_odom = None
+
     # ------- goal admission -------
 
     def _goal_cb(self, goal: MotionPrimitive.Goal) -> GoalResponse:
@@ -178,10 +201,8 @@ class MotionNode(Node):
                 f'rejecting goal: |distance| {abs(goal.distance):.2f} exceeds cap '
                 f'{self._max_distance[goal.type]:.2f} for {goal.type}')
             return GoalResponse.REJECT
-        odom, mono = self._odom_snapshot()
-        if odom is None or (time.monotonic() - mono) > self._odom_timeout:
-            self.get_logger().warn('rejecting goal: no fresh odometry')
-            return GoalResponse.REJECT
+        # 里程计新鲜度改到 _execute 开头检查(懒订阅后, 空闲时本来就没有
+        # odom 数据, 在这里拒绝会拒掉一切 goal)。
         with self._active_lock:
             if self._active:
                 self.get_logger().warn('rejecting goal: a primitive is already running')
@@ -233,7 +254,26 @@ class MotionNode(Node):
             (abs(goal.distance) / speed) * 2.0 + 2.0
 
         rotate = goal.type == MotionPrimitive.Goal.TYPE_ROTATE
-        start, _ = self._odom_snapshot()
+
+        # 懒订阅: 现在才挂上里程计, 等第一帧 (最多 odom_timeout*2)。
+        self._start_subs()
+        wait_deadline = time.monotonic() + self._odom_timeout * 2.0
+        start = None
+        while time.monotonic() < wait_deadline:
+            start, _ = self._odom_snapshot()
+            if start is not None:
+                break
+            time.sleep(0.02)
+        if start is None:
+            self._stop_subs()
+            with self._active_lock:
+                self._active = False
+            result.success = False
+            result.message = 'no odometry available'
+            result.traveled = 0.0
+            self._finalize(goal_handle, 'abort', result)
+            return result
+
         prev_yaw = start[2]
         traveled = 0.0
         # Divergence guard baseline (None when raw odom absent, e.g. tests).
@@ -273,6 +313,10 @@ class MotionNode(Node):
 
                 # Divergence guard: EKF vs raw cmd-integration odometry.
                 raw = self._raw_snapshot()
+                if raw_start is None and raw is not None:
+                    # 懒订阅下 raw 首帧可能比 filtered 晚到, 迟捕获基线。
+                    raw_start = raw
+                    raw_prev_yaw = raw[2]
                 if raw_start is not None and raw is not None:
                     if rotate:
                         raw_traveled += wrap_pi(raw[2] - raw_prev_yaw)
@@ -328,6 +372,7 @@ class MotionNode(Node):
         finally:
             # Whatever happened, leave the base stopped.
             self._publish_stop()
+            self._stop_subs()  # 懒订阅: goal 结束即退订, 空闲不吃 CPU
             with self._active_lock:
                 self._active = False
 

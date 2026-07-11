@@ -100,6 +100,9 @@ def generate_launch_description():
             output='screen',
             arguments=['messages', '/camera/color/image_raw/compressed',
                        '2.0', '/viewer/color_compressed'],
+            # lazy: 没有查看端订阅 /viewer/color_compressed 时, 自动退订
+            # 上游 —— 15fps 的 JPEG 编码链路整个休眠, 不白烧 CPU。
+            parameters=[{'lazy': True}],
         ),
 
         Node(
