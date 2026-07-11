@@ -282,7 +282,10 @@ def main() -> int:
 
     roslibpy.Topic(ros, "/tf_static", "tf2_msgs/msg/TFMessage",
                    queue_length=1).subscribe(lambda m: on_tf(m, True))
+    # /tf 全量是 50Hz+ (EKF), rosbridge (纯 Python) 逐条 JSON 序列化扛
+    # 不住, 在 rosbridge 侧限到 10Hz —— 位姿显示足够流畅, 开销降 5 倍。
     roslibpy.Topic(ros, "/tf", "tf2_msgs/msg/TFMessage",
+                   throttle_rate=100,
                    queue_length=1).subscribe(lambda m: on_tf(m, False))
     roslibpy.Topic(ros, "/camera/color/camera_info", "sensor_msgs/msg/CameraInfo",
                    throttle_rate=2000, queue_length=1).subscribe(on_camera_info)
