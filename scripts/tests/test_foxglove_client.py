@@ -85,8 +85,9 @@ def fake_bridge(ws):
 def main() -> int:
     got_tf, got_img = [], []
 
+    # Mirror the Jazzy bridge (3.2.6): it only accepts "foxglove.sdk.v1".
     with serve(fake_bridge, "127.0.0.1", 0,
-               subprotocols=["foxglove.websocket.v1"]) as server:
+               subprotocols=["foxglove.sdk.v1"]) as server:
         threading.Thread(target=server.serve_forever, daemon=True).start()
         port = server.socket.getsockname()[1]
         client = live_rerun.FoxgloveClient("127.0.0.1", port)

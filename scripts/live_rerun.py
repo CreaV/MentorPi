@@ -250,7 +250,12 @@ class FoxgloveClient:
 
         while True:
             try:
-                with connect(self.url, subprotocols=["foxglove.websocket.v1"],
+                # foxglove_bridge >= 3.x (SDK-based, e.g. Jazzy 3.2.6) expects
+                # "foxglove.sdk.v1"; older bridges expect the v1 string. Offer
+                # both — the wire framing we rely on is identical.
+                with connect(self.url,
+                             subprotocols=["foxglove.sdk.v1",
+                                           "foxglove.websocket.v1"],
                              max_size=None) as ws:
                     if self._on_ready:
                         self._on_ready()
