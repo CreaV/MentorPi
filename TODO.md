@@ -95,10 +95,19 @@
       `gs_work/exports/splat/splat.ply`（47.3 万高斯）。（2026-07-05）
 - [x] 查看端：`live_rerun.py --splat --cloud --serve` 双层显示，splat 与
       SLAM 点云对齐确认。web viewer URL 里 `+` 必须编码为 `%2B`。（2026-07-05）
-- [ ] **最终合体验证**（电池没电中断，明天第一件事）：hub 供电拓扑下重启
-      → loc_3d 锁定 → Rerun 里实时机器人 + 相机视锥出现在 splat 场景。
+- [x] **最终合体验证**：loc_3d 真实位姿锁定 (−0.80, −1.31) → Rerun 里
+      实时机器人 + 视锥出现在 splat 场景,用户确认可用。(2026-07-11)
+- [ ] **验证 foxglove 二进制通道**（代码完成+假服务器测试通过,未上真机）：
+      `live_rerun.py --robot <ip>`（默认即 foxglove :8765）,对比流畅度;
+      相机需直插 Pi 蓝口（挂 hub 会双流带宽塌陷 → 3fps）。
 - [ ] 手机端 `--serve` 实测。
 - [ ] 跟进 Rerun 原生 3DGS 渲染支持，落地后替换点云 fallback。
+- [ ] 增量建图实测：同 db 再进 slam_3d + `load_all_nodes:=true`（CLI 直接
+      launch,supervisor 的 SetMode 还没有该字段——要用再加）,确认新旧
+      会话合并、GS 重训后场景更新。
+- [ ] 低光提示：夜间/暗处彩色相机掉到 1-4Hz、特征枯竭 → 重定位静默失败
+      （深度不受影响）。特征签名:color 低频+depth 正常。对策:开灯或
+      白天作业;可选研究固定曝光参数。
 
 ## 4.5 今日遗留问题（2026-07-05 晚，按优先级）
 

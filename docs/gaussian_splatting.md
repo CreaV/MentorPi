@@ -89,12 +89,16 @@ ns-export gaussian-splat \
 依赖（查看端 PC，无需 ROS）：
 
 ```bash
-pip install rerun-sdk roslibpy numpy plyfile
+pip install rerun-sdk numpy plyfile websockets rosbags   # 默认 foxglove 通道
+pip install roslibpy                                     # 仅 --transport rosbridge 时需要
 ```
 
-机器人保持 `remote.launch.py` 运行（rosbridge :9090 已就绪），重启后先切
-`loc_3d` 模式重定位（手机 SPA 上点 "Loc 3D" 选 .db，或桌面调用
-`/mode/set`）：
+**数据通道**：默认走 foxglove_bridge (:8765, C++ 二进制直通)——CDR 原样转发,
+解码在查看端做,Pi 零额外开销,TF 全速、视频不用 base64。rosbridge (:9090,
+Python 逐条 JSON) 保留为 `--transport rosbridge` 兜底,但高频流会卡。
+
+机器人保持 `remote.launch.py` 运行,重启后先切 `loc_3d` 模式重定位
+（手机 SPA 上点 "Loc 3D" 选 .db,或桌面调用 `/mode/set`）：
 
 ```bash
 # PC 本地 Rerun 窗口
