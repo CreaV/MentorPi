@@ -328,7 +328,11 @@ def main() -> int:
                     help="rtabmap exported cloud .ply (map frame)")
     ap.add_argument("--point-radius", type=float, default=0.008)
     ap.add_argument("--image-hz", type=float, default=4.0,
-                    help="live camera image rate (throttled robot-side)")
+                    help="max live camera image decode rate (client-side)")
+    ap.add_argument("--image-topic", default="/viewer/color_compressed",
+                    help="compressed image topic; default is the robot-side "
+                         "2Hz throttled stream (WiFi-friendly). Use "
+                         "/camera/color/image_raw/compressed for full rate")
     ap.add_argument("--serve", action="store_true",
                     help="serve the Rerun web viewer (phone/tablet browsers)")
     args = ap.parse_args()
@@ -425,7 +429,7 @@ def main() -> int:
         # 全速吃, 位姿丝滑; 图像按 image_hz 客户端丢帧(解码前就丢)。
         fox.subscribe("/tf", lambda m: on_tf(m, False))
         fox.subscribe("/camera/color/camera_info", on_camera_info, min_period=2.0)
-        fox.subscribe("/camera/color/image_raw/compressed", on_compressed_image,
+        fox.subscribe(args.image_topic, on_compressed_image,
                       min_period=image_period)
         fox.on_ready(lambda: print(f"connected to ws://{args.robot}:{port} (foxglove)"))
         print("connecting ... (Ctrl-C to quit)")
@@ -448,7 +452,7 @@ def main() -> int:
                    queue_length=1).subscribe(lambda m: on_tf(m, False))
     roslibpy.Topic(ros, "/camera/color/camera_info", "sensor_msgs/msg/CameraInfo",
                    throttle_rate=2000, queue_length=1).subscribe(on_camera_info)
-    roslibpy.Topic(ros, "/camera/color/image_raw/compressed",
+    roslibpy.Topic(ros, args.image_topic,
                    "sensor_msgs/msg/CompressedImage",
                    throttle_rate=int(1000 * image_period),
                    queue_length=1).subscribe(on_compressed_image)

@@ -77,7 +77,10 @@ def generate_launch_description():
                 'port': LaunchConfiguration('foxglove_port'),
                 'address': '0.0.0.0',
                 'tls': False,
-                'send_buffer_limit': 10000000,
+                # 每客户端发送队列上限。10MB 在 WiFi 吞吐跟不上订阅流量时
+                # 会积成"几分钟延迟"的陈旧队列(实测); 1MB 让桥主动丢旧帧,
+                # 延迟封顶在 ~1 秒级, 画面永远是新鲜的。
+                'send_buffer_limit': 1000000,
                 'use_compression': False,
                 'topic_whitelist': ['.*'],
                 'service_whitelist': ['.*'],
@@ -85,6 +88,18 @@ def generate_launch_description():
                 'capabilities': ['clientPublish', 'parameters', 'parametersSubscribe',
                                  'services', 'connectionGraph', 'assets'],
             }],
+        ),
+
+        # 远程查看用的低频图像流 (2Hz)。15fps 压缩流在 2.4G WiFi 上供不起
+        # (夜间高增益噪声帧更肥), 订阅端只需要预览帧率 —— 源头节流,
+        # live_rerun 默认订这个。需要 ros-jazzy-topic-tools。
+        Node(
+            package='topic_tools',
+            executable='throttle',
+            name='viewer_image_throttle',
+            output='screen',
+            arguments=['messages', '/camera/color/image_raw/compressed',
+                       '2.0', '/viewer/color_compressed'],
         ),
 
         Node(
