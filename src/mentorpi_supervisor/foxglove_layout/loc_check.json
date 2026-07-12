@@ -15,7 +15,12 @@
       "followMode": "follow-none",
       "followTf": "map",
       "scene": {
-        "transforms": {"axisScale": 0.4}
+        "labelScaleFactor": 0.3,
+        "transforms": {
+          "axisScale": 0.4,
+          "showLabel": false,
+          "labelSize": 0.05
+        }
       },
       "transforms": {
         "frame:map": {"visible": true},
@@ -23,8 +28,8 @@
         "frame:base_link": {"visible": true}
       },
       "topics": {
-        "/map": {"visible": true, "colorMode": "custom", "minColor": "#ffffff", "maxColor": "#000000", "unknownColor": "#88888844"},
-        "/scan": {"visible": true, "colorMode": "flat", "flatColor": "#ff3333", "pointSize": 4},
+        "/map": {"visible": true, "colorMode": "custom", "minColor": "#e8e8e8ff", "maxColor": "#1a1a66ff", "unknownColor": "#00000000", "frameLocked": true},
+        "/scan": {"visible": true, "colorMode": "flat", "flatColor": "#ff2200", "pointSize": 8, "decayTime": 0},
         "/localization_pose": {"visible": true, "type": "arrow", "color": "#33ddff", "showCovariance": true, "covarianceColor": "#33ddff33"},
         "/odometry/filtered": {"visible": false}
       },
