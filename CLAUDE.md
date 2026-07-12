@@ -126,8 +126,9 @@ map → odom → base_link → camera_link → camera_*_optical_frame
 
 | Package | Type | Node(s) | Description |
 |---------|------|---------|-------------|
-| `mentorpi_msgs` | C++ (ament_cmake) | — | `msg/Gimbal.msg`, `msg/MotorStatus.msg`, `srv/SetMode.srv`, `srv/ListMaps.srv` |
+| `mentorpi_msgs` | C++ (ament_cmake) | — | `msg/Gimbal.msg`, `msg/MotorStatus.msg`, `msg/Buzzer.msg`, `srv/SetMode.srv`, `srv/ListMaps.srv`, `action/MotionPrimitive.action` |
 | `mentorpi_base` | Python | `base_node` | Serial protocol, mecanum kinematics, odometry, IMU |
+| `mentorpi_motion` | Python | `motion_node` | 有界运动原语 action server（语音/VLA/agent 的执行底座，base.launch 常驻） |
 | `mentorpi_teleop` | Python | `teleop_node` | Joystick mapping |
 | `mentorpi_bringup` | Python | — | Launch files and config (see below) |
 | `mentorpi_supervisor` | Python | `supervisor_node` | Mode switcher; subprocess-launches slam_2d/slam_3d/loc_2d on request |
@@ -152,7 +153,8 @@ Architecture: **base 常驻 + 模式按需挂载**。`base.launch.py` 在 `remot
 
 | File | Package | Description |
 |------|---------|-------------|
-| `base.launch.py` | mentorpi_bringup | 常驻硬件: base_node + STM32 IMU Madgwick + EKF + Gemini 2L (RGB-D 15fps) + joy + teleop + lidar + base→camera/laser TF |
+| `base.launch.py` | mentorpi_bringup | 常驻硬件: base_node + STM32 IMU Madgwick + EKF + camera_watchdog (托管 Gemini 2L) + joy + teleop + lidar + base→camera/laser TF |
+| `camera.launch.py` | mentorpi_bringup | Gemini 2L (RGB-D 15fps, IMU off)。**不直接进别的 launch** —— 由 `camera_watchdog` 节点 spawn 并监测 `/camera/depth/camera_info`,帧停发 >20s 或进程死亡时自动 `usbreset` + 重启 driver(修 openUsbDevice 卡死) |
 | `slam_2d.launch.py` | mentorpi_bringup | 仅 slam_toolbox 异步建图 |
 | `slam_3d.launch.py` | mentorpi_bringup | 仅 rtabmap + point_cloud_xyzrgb (相机已在 base 里跑)；融合 lidar `/scan` 做 NeighborLinkRefining + proximity detection 抗轮速打滑 |
 | `loc_2d.launch.py` | mentorpi_bringup | 仅 slam_toolbox 定位 (吃 `map_file:=...`) |
@@ -182,6 +184,7 @@ Architecture: **base 常驻 + 模式按需挂载**。`base.launch.py` 在 `remot
 
 **Receiving (background thread):**
 - IMU data (Function=7) → publishes `/imu/data_raw` (sensor_msgs/Imu)
+- SYS battery (Function=0, sub-id 0x04) → publishes `/battery` (sensor_msgs/BatteryState; voltage 单位 V,反映 STM32 电源输入电压)
 - State machine packet parser identical to official SDK's `recv_task`
 
 **Parameters:**
@@ -192,6 +195,8 @@ Architecture: **base 常驻 + 模式按需挂载**。`base.launch.py` 在 `remot
 | `publish_odom_tf` | `False` | Publish odom→base_link TF (disable when EKF handles it) |
 | `accel_limit_linear` | `1.5` m/s² | odom 积分用的底盘加速度斜坡模型（cmd_vel 是阶跃,底盘不是;0=关闭直接积分指令） |
 | `accel_limit_angular` | `10.0` rad/s² | 同上,角加速度 |
+| `gyro_bias_estimation` | `True` | 停车时在线估计陀螺仪零偏并在 `/imu/data_raw` 中扣除。实测零偏 gz≈+0.28°/s,不扣会被 EKF 积成 ~15°/min 的 yaw 漂移(定位模式下激光相对地图整体旋转) |
+| `obstacle_guard` | `True` | 激光避障兜底:订 `/scan` 算前/后/左/右四扇区(各 90°)最近障碍,"撞向障碍"的平移分量在 `guard_slow_distance`(0.6m)内线性减速、`guard_stop_distance`(0.3m,从雷达中心起算)内清零。只拦危险分量——被挡后仍可倒车/横移/旋转脱困。拦截所有 cmd_vel 来源(手柄/手机/Foxglove/VLA)。阻挡状态发 `/guard/blocked`(std_msgs/String,方向逗号连接,空=放行)。雷达停更 >`guard_scan_timeout`(1s)自动放行。全部参数热更新 |
 
 **里程计协方差**:`/odom` 的 **twist** 协方差才是 EKF 实际消费的(融合 vx/vy)。运动时 vx=0.02、vy=0.05(横移打滑更狠)、vyaw=0.2(原地旋转打滑最狠,EKF 已改为不融合它,yaw 率来自陀螺仪);静止时 1e-6 锁死漂移。
 
@@ -200,6 +205,7 @@ Architecture: **base 常驻 + 模式按需挂载**。`base.launch.py` 在 `remot
 |-------|------|------|-------------|
 | `/odom` | Odometry | 50Hz | Dead-reckoning from cmd_vel integration |
 | `/imu/data_raw` | Imu | ~50Hz | Raw accel (m/s²) + gyro (rad/s), no orientation |
+| `/battery` | BatteryState | ~1Hz | STM32 电源输入电压(V),Foxglove Gauge 量程 6.4–8.4V(2S lipo 真实区间:8.4=满电,6.6 该停机充电,≈4.4V=电源开关没开的寄生电压,指针触底+`present` 仍 true);`present=false` 表示采样异常或未接电池 |
 
 ## IMU Data Flow
 
@@ -294,10 +300,9 @@ ros2 launch mentorpi_bringup rtabmap_mapping.launch.py
 # 遥控机器人走一圈，地图自动保存到 ~/rtabmap_maps/rtabmap.db
 ```
 
-**注意:** 切换架构或频繁中断后 `rtabmap.db` 可能积累 word reference 错位(`addWordRef() Not found word`)。出现这类报错时备份并重建:
-```bash
-mv ~/rtabmap_maps/rtabmap.db ~/rtabmap_maps/rtabmap.db.bak
-```
+**增量建图(多会话)**:slam_3d 对已存在的 db 是**追加式**——同一个 `database_path` 再次进入即"续图",新旧会话靠回环合并。续图建议加 `load_all_nodes:=true`(旧图节点全载入 WM,开头即重定位合并,不用漂移等回环)。**建新图 = 传新文件名**(`database_path:=~/rtabmap_maps/room2.db`),不必手动备份旧库。
+
+**注意:** `addWordRef() Not found word` / `loadWordsQuery ... loaded words (0)` = 词典损坏(典型原因:落库中途被杀,supervisor 已加 90s 宽限防它)。修复:`rtabmap-reprocess corrupted.db repaired.db`(从库存图像重建词典,回环全保留);或备份重扫。
 
 ### Performance Tuning (Pi 5 实测)
 
@@ -339,7 +344,7 @@ rtabmap 节点参数:
 **Gemini 2L USB requirements:**
 - Must use USB 3.0 port (blue, 5000M) and USB-C 3.0 cable. USB 2.0 (480M) produces `color frame is not decoded` errors and disconnects within 1 second.
 - Pi 5 needs `PSU_MAX_CURRENT=5000` in EEPROM (`sudo rpi-eeprom-config --edit`) and `usb_max_current_enable=1` in `/boot/firmware/config.txt` to prevent voltage-drop-induced USB resets when the IR projector kicks in.
-- If camera fails to initialize (`uvc_open -6`), try `usbreset 2bc5:0670`. Stale `component_container` processes from a previous launch can also hold the device — check with `ps -ef | grep component_container`.
+- If camera fails to initialize (`uvc_open -6` / `openUsbDevice failed`), `camera_watchdog` now auto-recovers (usbreset + driver restart, ~1min cycle)。手动兜底: `usbreset 2bc5:0670` 后重启 driver。Stale `component_container` processes from a previous launch can also hold the device — check with `ps -ef | grep component_container`.
 
 ### RViz2 Visualization
 
@@ -454,6 +459,7 @@ unit 文件在 `scripts/mentorpi-remote.service`,关键点:
 - `mode`:必填
 - `map_file`:`loc_2d` 必填(slam_toolbox 路径不带扩展名,如 `/home/pi/maps/my_room`)
 - `database_path`:`slam_3d`/`loc_3d` 可选,默认 `~/rtabmap_maps/rtabmap.db`
+- `load_all_nodes`:`slam_3d` 增量续图用——旧图节点全载入 WM,开局即重定位合并(其余模式忽略)
 
 **安全模型**:第一版裸跑,假设局域网可信(无认证)。生产部署需要在 foxglove_bridge 前加 nginx + TLS + basic auth,或开 `ros-jazzy-foxglove-bridge` 的 TLS。
 
@@ -462,6 +468,18 @@ unit 文件在 `scripts/mentorpi-remote.service`,关键点:
 **地图保存**(v1 暂不在 supervisor 内):
 - 2D: `ros2 service call /slam_toolbox/serialize_map slam_toolbox/srv/SerializePoseGraph "{filename: '/home/pi/maps/my_room'}"`
 - 3D: rtabmap 边走边自动写 `~/rtabmap_maps/rtabmap.db`
+
+## Motion Primitives（语音 / VLA / agent 的运动执行底座）
+
+`mentorpi_motion/motion_node`（`base.launch.py` 常驻）提供**有界**运动原语，远端智能（语音 agent、VLA）永远发"意图"而不是裸 cmd_vel 流：
+
+- Action `motion/primitive`（`mentorpi_msgs/action/MotionPrimitive`）：`type` = `forward`/`strafe`/`rotate`，`distance` 米或弧度（带符号），`max_speed`、`timeout` 可选。节点自己以 20Hz 发 `/cmd_vel`（喂 base_node watchdog），用 `/odometry/filtered` 闭环测位移，梯形速度曲线，完成/取消/超时/odom 停更 (>0.5s) 时**一律停车**。单 goal 互斥（忙时拒绝新 goal）。
+- Service `motion/stop`（`std_srvs/Trigger`）：取消当前 goal + 清零速度，接"停"类指令。
+- 每 goal 上限：平移 3m、旋转 ~2 圈；速度上限 0.4 m/s / 1.5 rad/s（参数可调）。
+- 测试：`src/mentorpi_motion/test/test_motion_node.py` 用假底盘闭环仿真，dev 机可跑（无需硬件）。
+- **rclpy 坑**（已修，勿回退）：Jazzy 的 `goal_handle.succeed()/abort()/canceled()` 会立即用**空 Result** 填 result future，靠 execute 回调返回值回填会跟客户端 result 请求竞态（高负载下客户端拿到空结果）。必须把 result 作为参数传给终态调用（见 `MotionNode._finalize`）。
+
+**语音接入**：AsynchronousIntentRoutingEngine（独立仓库）的 `robot` skill 通过 rosbridge (:9090) 调上述接口；服务器端设 `AIR_ROBOT_ROSBRIDGE_URL=ws://<robot-ip>:9090` 即启用。手动验证：AIRE 仓库 `python robot_cli.py ws://<robot-ip>:9090 move forward 0.5`。整体规划见 `docs/roadmap.md`。
 
 ## 3D 可视化 & 高斯泼溅 (Gaussian Splatting)
 
@@ -472,6 +490,24 @@ unit 文件在 `scripts/mentorpi-remote.service`,关键点:
 - `scripts/live_rerun.py`(跑在查看端 PC,Pi 零负担):Rerun 里显示 splat/SLAM 点云 + 实时机器人位姿(TF via rosbridge :9090)+ 相机 FOV 视锥 + 实时视频;`--serve` 供手机浏览器
 - 重启后流程:切 `loc_3d` 模式 → rtabmap 重定位发布 map→odom → live_rerun 里机器人出现在 splat 场景中的真实位置
 - `scripts/bag_to_rerun.py`:离线 bag 回放调试(不变)
+
+## Known Issues
+
+**USB 过流导致外设集体掉线(遥控一段时间后崩溃)** — 根因、供电拓扑、台架持续调试配置见 `docs/power_troubleshooting.md`。
+
+### STM32 蜂鸣器在 Pi 接官方 PSU 时持续 5 声循环报警
+
+**症状**:Pi 由 STM32 共享的 Type-C 供电时一切正常;改用官方原装 PSU 单独给 Pi 供电后,STM32 蜂鸣器开始 5 声 × 1 秒循环报警。SDK 主机侧不发任何 5 声序列(已 grep 确认),所以这是 STM32 固件本身的报警。
+
+**最可能根因**(尚未实测确认):
+1. **反灌**:STM32 → Pi 的 Type-C 共享线没拔,Pi 被官方 PSU 推到 5.1V,反向倒灌进 STM32 输出端,固件触发保护。
+2. **接地环路**:官方 PSU 接市电地,STM32 在电池上(浮地),USB 串口线的 GND 把两个参考地连起来,几百 mV 的电位差让 STM32 ADC 误读自己的电池电压,触发欠压报警(5 声 1Hz 是常见 lipo 欠压模式)。
+
+**判别方法**:用官方 PSU 时,把 STM32 → Pi 的 Type-C 共享线拔掉,只保留 USB 串口线。
+- 5 声没了 → 反灌
+- 还在响 → 接地环路(需要 USB 隔离器,或使用接地良好的 PSU)
+
+短期解决:就用 STM32 共享供电(电池模式),或拔掉 Type-C 共享线只走官方 PSU + 串口线。
 
 ## Reference Code
 

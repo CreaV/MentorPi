@@ -1,8 +1,6 @@
 from setuptools import find_packages, setup
-import os
-from glob import glob
 
-package_name = 'mentorpi_bringup'
+package_name = 'mentorpi_motion'
 
 setup(
     name=package_name,
@@ -12,14 +10,12 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),
-        (os.path.join('share', package_name, 'config'), glob('config/*.yaml')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='pi',
     maintainer_email='pi@todo.todo',
-    description='TODO: Package description',
+    description='Bounded odometry-closed-loop motion primitives',
     license='TODO: License declaration',
     extras_require={
         'test': [
@@ -28,7 +24,7 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'camera_watchdog = mentorpi_bringup.camera_watchdog:main',
+            'motion_node = mentorpi_motion.motion_node:main'
         ],
     },
 )

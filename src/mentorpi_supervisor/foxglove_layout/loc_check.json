@@ -1,0 +1,126 @@
+{
+  "configById": {
+    "3D!loccheck": {
+      "cameraState": {
+        "perspective": false,
+        "distance": 10,
+        "phi": 0.1,
+        "thetaOffset": 0,
+        "targetOffset": [0, 0, 0],
+        "target": [0, 0, 0],
+        "fovy": 45,
+        "near": 0.5,
+        "far": 5000
+      },
+      "followMode": "follow-none",
+      "followTf": "map",
+      "scene": {
+        "labelScaleFactor": 0.3,
+        "transforms": {
+          "axisScale": 0.4,
+          "showLabel": false,
+          "labelSize": 0.05
+        }
+      },
+      "transforms": {
+        "frame:map": {"visible": true},
+        "frame:odom": {"visible": true},
+        "frame:base_link": {"visible": true}
+      },
+      "topics": {
+        "/map": {"visible": true, "colorMode": "custom", "minColor": "#e8e8e8ff", "maxColor": "#1a1a66ff", "unknownColor": "#00000000", "frameLocked": true},
+        "/scan": {"visible": true, "colorMode": "flat", "flatColor": "#ff2200", "pointSize": 8, "decayTime": 0},
+        "/localization_pose": {"visible": true, "type": "arrow", "color": "#33ddff", "showCovariance": true, "covarianceColor": "#33ddff33"},
+        "/odometry/filtered": {"visible": false}
+      },
+      "layers": {}
+    },
+    "Image!cam": {
+      "cameraState": {},
+      "topic": "/viewer/color_compressed",
+      "transformMarkers": false,
+      "synchronize": false,
+      "smooth": false,
+      "flipHorizontal": false,
+      "flipVertical": false,
+      "rotation": 0
+    },
+    "Indicator!mode": {
+      "path": "/mode/status.data",
+      "style": "background",
+      "rules": [
+        {"operator": "=", "rawValue": "idle", "color": "#888888", "label": "IDLE"},
+        {"operator": "=", "rawValue": "slam_3d", "color": "#33aa44", "label": "3D SLAM"},
+        {"operator": "=", "rawValue": "loc_3d", "color": "#33ddff", "label": "3D LOC"},
+        {"operator": "=", "rawValue": "loc_2d", "color": "#aa44aa", "label": "2D LOC"},
+        {"operator": "=", "rawValue": "slam_2d", "color": "#3388ff", "label": "2D SLAM"}
+      ],
+      "fallbackColor": "#444444",
+      "fallbackLabel": "?"
+    },
+    "Gauge!battery": {
+      "path": "/battery.voltage",
+      "minValue": 6.4,
+      "maxValue": 8.4,
+      "colorMap": "red-yellow-green",
+      "colorMode": "colormap",
+      "gradient": ["#ff3333", "#33aa44"],
+      "reverse": false
+    },
+    "CallService!setLoc3d": {
+      "serviceName": "/mode/set",
+      "requestPayload": "{\n  \"mode\": \"loc_3d\",\n  \"map_file\": \"\",\n  \"database_path\": \"\"\n}",
+      "layout": "vertical",
+      "advancedView": false,
+      "buttonText": "Start 3D Localization",
+      "buttonTooltip": "rtabmap loc mode on ~/rtabmap_maps/rtabmap.db",
+      "buttonColor": "#33ddff"
+    },
+    "CallService!setIdle": {
+      "serviceName": "/mode/set",
+      "requestPayload": "{\n  \"mode\": \"idle\",\n  \"map_file\": \"\",\n  \"database_path\": \"\"\n}",
+      "layout": "vertical",
+      "advancedView": false,
+      "buttonText": "Stop (idle)",
+      "buttonTooltip": "Stop localization",
+      "buttonColor": "#888888"
+    },
+    "RawMessages!pose": {
+      "topicPath": "/localization_pose.pose.pose.position"
+    }
+  },
+  "globalVariables": {},
+  "userNodes": {},
+  "playbackConfig": {"speed": 1.0},
+  "layout": {
+    "first": "3D!loccheck",
+    "second": {
+      "first": {
+        "first": "Image!cam",
+        "second": {
+          "first": "Indicator!mode",
+          "second": "Gauge!battery",
+          "direction": "row",
+          "splitPercentage": 60
+        },
+        "direction": "column",
+        "splitPercentage": 55
+      },
+      "second": {
+        "first": {
+          "first": "CallService!setLoc3d",
+          "second": "CallService!setIdle",
+          "direction": "row",
+          "splitPercentage": 55
+        },
+        "second": "RawMessages!pose",
+        "direction": "column",
+        "splitPercentage": 40
+      },
+      "direction": "column",
+      "splitPercentage": 55
+    },
+    "direction": "row",
+    "splitPercentage": 68
+  }
+}

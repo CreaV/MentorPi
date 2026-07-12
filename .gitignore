@@ -9,3 +9,8 @@ __pycache__
 .vscode
 .claude
 rtabmap_maps
+
+# 高斯泼溅工作区: rtabmap 库、nerfstudio 数据集/checkpoint、splat.ply (数百MB)
+gs_work/
+# 随手拍的接线照片
+IMG_*.jpg

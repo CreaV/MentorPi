@@ -138,7 +138,8 @@ class SupervisorNode(Node):
         try:
             self._stop_active()
             if target != 'idle':
-                self._start_mode(target, request.map_file, request.database_path)
+                self._start_mode(target, request.map_file, request.database_path,
+                                 request.load_all_nodes)
             with self._lock:
                 self._current_mode = target
             self._publish_status()
@@ -180,12 +181,18 @@ class SupervisorNode(Node):
 
     # ------- subprocess lifecycle -------
 
-    def _start_mode(self, mode: str, map_file: str, database_path: str):
+    def _start_mode(self, mode: str, map_file: str, database_path: str,
+                    load_all_nodes: bool = False):
         cmd = ['ros2', 'launch', 'mentorpi_bringup', f'{mode}.launch.py']
         if mode == 'loc_2d':
             cmd.append(f'map_file:={map_file}')
         elif mode in ('slam_3d', 'loc_3d'):
             cmd.append(f'database_path:={database_path or DEFAULT_RTABMAP_DB}')
+            # 增量续图: 旧图节点全载入 WM, 开局即重定位合并 (勿漂移等回环)。
+            # loc_3d 的 launch 里本来就是 InitWMWithAllNodes=true, 只对
+            # slam_3d 有意义。
+            if mode == 'slam_3d' and load_all_nodes:
+                cmd.append('load_all_nodes:=true')
 
         self.get_logger().info(f'launching: {" ".join(cmd)}')
         # start_new_session=True puts the launch and all its children in a new
@@ -211,14 +218,21 @@ class SupervisorNode(Node):
             self._proc = None
             return
 
-        # Give ros2 launch time to shut nodes down gracefully.
+        # Give ros2 launch time to shut nodes down gracefully. rtabmap
+        # flushes its whole database on shutdown — a 160MB db takes well
+        # over 10s on the Pi's SD card, and killing it mid-save corrupts
+        # the visual word dictionary (loadWordsQuery 0 words, relocation
+        # permanently broken — observed 2026-07-05). 3D modes get a long
+        # grace period; SIGKILL only as the very last resort.
+        sigint_grace = 90 if self._current_mode in ('slam_3d', 'loc_3d') else 10
         try:
-            proc.wait(timeout=10)
+            proc.wait(timeout=sigint_grace)
         except subprocess.TimeoutExpired:
-            self.get_logger().warn('launch did not exit on SIGINT, sending SIGTERM')
+            self.get_logger().warn(
+                f'launch did not exit {sigint_grace}s after SIGINT, sending SIGTERM')
             try:
                 os.killpg(proc.pid, signal.SIGTERM)
-                proc.wait(timeout=5)
+                proc.wait(timeout=15)
             except (ProcessLookupError, subprocess.TimeoutExpired):
                 self.get_logger().error('launch unresponsive, sending SIGKILL')
                 try:

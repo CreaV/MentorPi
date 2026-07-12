@@ -1,9 +1,13 @@
 import rclpy
 from rclpy.node import Node
+from rcl_interfaces.msg import SetParametersResult
 from geometry_msgs.msg import Twist, TransformStamped, Quaternion
 from nav_msgs.msg import Odometry
-from sensor_msgs.msg import Imu
+from sensor_msgs.msg import Imu, BatteryState, LaserScan
+from std_msgs.msg import String
 from mentorpi_msgs.msg import Gimbal, MotorStatus, Buzzer
+from rclpy.qos import (qos_profile_sensor_data, QoSProfile,
+                       ReliabilityPolicy, DurabilityPolicy)
 from tf2_ros import TransformBroadcaster
 import serial
 import struct
@@ -46,10 +50,14 @@ def checksum_crc8(data):
         check = crc8_table[check ^ b]
     return check & 0xFF
 
+FUNC_SYS = 0
 FUNC_BUZZER = 2
 FUNC_MOTOR = 3
 FUNC_PWM_SERVO = 4
 FUNC_IMU = 7
+
+# SYS sub-ids
+SYS_BATTERY = 0x04
 
 GRAVITY = 9.80665
 
@@ -109,6 +117,82 @@ class MentorPiBase(Node):
         self.accel_limit_linear = self.get_parameter('accel_limit_linear').value
         self.accel_limit_angular = self.get_parameter('accel_limit_angular').value
 
+        # 轮径: 标称 0.065, 卷尺标定 2026-07-05 两轮迭代 (3x 1m 粗标 0.9864
+        # -> 0.0641; 精读 0.983/0.9914 再乘 0.9915) -> 0.0636。
+        self.declare_parameter('wheel_diameter', 0.0636)
+        self.wheel_diameter = self.get_parameter('wheel_diameter').value
+
+        # 麦轮横移尺度(只作用于电机指令, odom 积分仍用原始 cmd)。
+        # 卷尺标定 2026-07-05: 首测 1.148m/1m 是坏数据(航向保持关闭+
+        # 单轮参考系); 复测(航向保持开)原生增益 ≈1.005 -> 保持 1.0。
+        self.declare_parameter('vy_scale', 1.0)
+        self.vy_scale = self.get_parameter('vy_scale').value
+
+        # 标定参数支持运行时 ros2 param set 即时生效(微调不用重启)。
+        self.add_on_set_parameters_callback(self._on_param_update)
+
+        # 陀螺仪零偏在线估计。2026-07-12 实测静止零偏 gz ≈ +0.28°/s:
+        # EKF 直接融合 vyaw 会把零偏积分成 ~15°/min 的持续"自转",
+        # 定位模式下 yaw 先验越滑越远,激光相对地图整体旋转。
+        # 停车(指令为零 >0.5s 且角速率接近当前零偏,即没被手搬)时
+        # 用 EMA 学习零偏,发布 /imu/data_raw 前扣除。
+        self.declare_parameter('gyro_bias_estimation', True)
+        self.gyro_bias_estimation = self.get_parameter('gyro_bias_estimation').value
+        self._gyro_bias = [0.0, 0.0, 0.0]
+        self._gyro_bias_n = 0
+        self._last_motion_time = 0.0
+
+        # 激光避障兜底 (obstacle guard)。所有 /cmd_vel(手柄/手机/Foxglove/
+        # VLA 原语)都经 base_node 变成电机指令,这里是唯一咽喉。
+        # 只拦截"撞向障碍"的平移分量: 障碍进入 slow 距离线性减速,
+        # 进入 stop 距离清零该分量;其余方向和原地旋转不受影响,
+        # 所以被墙挡住后仍可倒车/横移/转身脱困。
+        # 雷达数据停更 (>guard_scan_timeout) 时自动放行——安全网退化,
+        # 但不会把车锁死。距离从雷达中心起算 (车身半径 ~0.15m 已含在
+        # stop 默认值里)。
+        self.declare_parameter('obstacle_guard', True)
+        self.declare_parameter('guard_stop_distance', 0.30)   # m, 分量清零
+        self.declare_parameter('guard_slow_distance', 0.60)   # m, 开始减速
+        self.declare_parameter('guard_scan_timeout', 1.0)     # s, 雷达失联放行
+        # 自体遮挡过滤: 雷达能看到车尾自身结构 (实测 ±160~175° 一簇
+        # 0.11~0.13m 的点, 随车旋转不动 → 是自己)。比该半径近的点全部
+        # 忽略, 否则倒车永久被"自己"挡住。
+        self.declare_parameter('guard_ignore_radius', 0.16)   # m
+        # 前向低障补盲: 2D 雷达看不见 <0.18m 的障碍, /depth_scan (深度相机
+        # 光轴高度带的虚拟激光, 见 camera.launch.py) 只护前向。深度相机
+        # 近距失效 (~0.2m 以内无深度), 所以低障的停止线放远到 0.45m
+        # (从底盘中心, 含相机前置偏移), 在深度还可靠的距离就拦停,
+        # 避免"太近看不见→放行→蹭上去"的爬行。
+        self.declare_parameter('guard_depth_stop_distance', 0.45)  # m, 从底盘中心
+        self.declare_parameter('guard_depth_offset_x', 0.143)      # 相机在中心前方
+        self.obstacle_guard = self.get_parameter('obstacle_guard').value
+        self.guard_stop_distance = self.get_parameter('guard_stop_distance').value
+        self.guard_slow_distance = self.get_parameter('guard_slow_distance').value
+        self.guard_scan_timeout = self.get_parameter('guard_scan_timeout').value
+        self.guard_ignore_radius = self.get_parameter('guard_ignore_radius').value
+        self.guard_depth_stop_distance = self.get_parameter('guard_depth_stop_distance').value
+        self.guard_depth_offset_x = self.get_parameter('guard_depth_offset_x').value
+        # 四扇区最近障碍 (front/back/left/right, 各 90° 无死角覆盖)
+        self._scan_sectors = None
+        self._scan_time = 0.0
+        self._depth_min = float('inf')   # 低障虚拟激光最近距离 (已折算到底盘中心)
+        self._depth_time = 0.0
+        self._raw_cmd = (0.0, 0.0, 0.0)   # 最近一次 /cmd_vel 原始值
+        self._applied_cmd = (0.0, 0.0, 0.0)
+        self._blocked = ()
+        self.create_subscription(LaserScan, '/scan', self._scan_cb,
+                                 qos_profile_sensor_data)
+        self.create_subscription(LaserScan, '/depth_scan', self._depth_scan_cb,
+                                 qos_profile_sensor_data)
+        # latched: 晚订阅的客户端 (Foxglove/VLA) 一连上就能拿到当前状态
+        self.blocked_pub = self.create_publisher(
+            String, '/guard/blocked',
+            QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
+                       durability=DurabilityPolicy.TRANSIENT_LOCAL))
+        self.blocked_pub.publish(String(data=''))
+        # 指令不变但墙在靠近的场景 (手柄持续held / 原语 20Hz 流): 10Hz 复核
+        self.create_timer(0.1, self._guard_recheck)
+
         self.declare_parameter('publish_odom_tf', False)
         self.publish_odom_tf = self.get_parameter('publish_odom_tf').value
 
@@ -118,6 +202,7 @@ class MentorPiBase(Node):
 
         self.odom_pub = self.create_publisher(Odometry, '/odom', 10)
         self.imu_pub = self.create_publisher(Imu, '/imu/data_raw', 10)
+        self.battery_pub = self.create_publisher(BatteryState, '/battery', 10)
         self.tf_broadcaster = TransformBroadcaster(self)
         self.create_timer(0.02, self.odom_timer_callback)  # 50 Hz
         self.create_timer(0.1, self.watchdog_callback)     # 10 Hz cmd_vel timeout check
@@ -144,8 +229,11 @@ class MentorPiBase(Node):
                 continue
             try:
                 raw = ser.read(64)
-            except (OSError, serial.SerialException, AttributeError):
-                # 让 watchdog 接管重连; 这里只复位解析状态
+            except (OSError, serial.SerialException, AttributeError, TypeError):
+                # 让 watchdog 接管重连; 这里只复位解析状态。
+                # TypeError: watchdog 并发 close() 会把 pyserial 的 fd 置
+                # None, os.read(None) 抛 TypeError —— USB 过流掉线时实测
+                # 命中过,不接住的话本线程死掉,重连后 IMU 永久失联。
                 time.sleep(0.2)
                 state = STATE_START1
                 frame = []
@@ -180,8 +268,19 @@ class MentorPiBase(Node):
                     if checksum_crc8(bytes(frame)) == dat:
                         func = frame[0]
                         data = bytes(frame[2:])
-                        if func == FUNC_IMU and len(data) == 24:
-                            self._publish_imu(data)
+                        try:
+                            if func == FUNC_IMU and len(data) == 24:
+                                self._publish_imu(data)
+                            elif func == FUNC_SYS and len(data) == 3 and data[0] == SYS_BATTERY:
+                                self._publish_battery(data[1:])
+                        except Exception as e:
+                            # rclpy context 关闭时 publish 抛 RCLError;其余
+                            # 异常也不能杀本线程(它没有替补)。
+                            if not rclpy.ok():
+                                return
+                            self.get_logger().warn(
+                                f"publish failed in recv thread: {e}",
+                                throttle_duration_sec=5.0)
                     state = STATE_START1
 
     def _publish_imu(self, data):
@@ -213,9 +312,35 @@ class MentorPiBase(Node):
         ]
 
         # Gyroscope: deg/s -> rad/s
-        msg.angular_velocity.x = math.radians(gx)
-        msg.angular_velocity.y = math.radians(gy)
-        msg.angular_velocity.z = math.radians(gz)
+        gx_r = math.radians(gx)
+        gy_r = math.radians(gy)
+        gz_r = math.radians(gz)
+
+        if self.gyro_bias_estimation:
+            # 前 500 样本 (~10s) 快速收敛,之后等效时间常数 ~10s@50Hz,
+            # 缓慢跟踪温漂。0.05 rad/s (~3°/s) 门限挡住手搬/外力扰动。
+            if (self.cmd_vx == 0.0 and self.cmd_vy == 0.0 and self.cmd_wz == 0.0
+                    and time.monotonic() - self._last_motion_time > 0.5
+                    and abs(gx_r - self._gyro_bias[0]) < 0.05
+                    and abs(gy_r - self._gyro_bias[1]) < 0.05
+                    and abs(gz_r - self._gyro_bias[2]) < 0.05):
+                self._gyro_bias_n += 1
+                k = 1.0 / min(self._gyro_bias_n, 500)
+                self._gyro_bias[0] += k * (gx_r - self._gyro_bias[0])
+                self._gyro_bias[1] += k * (gy_r - self._gyro_bias[1])
+                self._gyro_bias[2] += k * (gz_r - self._gyro_bias[2])
+                if self._gyro_bias_n == 100:
+                    b = self._gyro_bias
+                    self.get_logger().info(
+                        f"gyro bias locked: [{math.degrees(b[0]):+.3f}, "
+                        f"{math.degrees(b[1]):+.3f}, {math.degrees(b[2]):+.3f}] deg/s")
+            gx_r -= self._gyro_bias[0]
+            gy_r -= self._gyro_bias[1]
+            gz_r -= self._gyro_bias[2]
+
+        msg.angular_velocity.x = gx_r
+        msg.angular_velocity.y = gy_r
+        msg.angular_velocity.z = gz_r
         msg.angular_velocity_covariance = [
             0.01, 0.0, 0.0,
             0.0, 0.01, 0.0,
@@ -223,6 +348,25 @@ class MentorPiBase(Node):
         ]
 
         self.imu_pub.publish(msg)
+
+    def _publish_battery(self, data):
+        # STM32 SYS packet sub-id 0x04: uint16 LE millivolts of input rail.
+        # 反映 STM32 电源输入电压(电池或 DC 适配器),不是 Pi 自己的供电。
+        mv = struct.unpack('<H', data)[0]
+        msg = BatteryState()
+        msg.header.frame_id = 'base_link'
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.voltage = mv / 1000.0
+        msg.current = float('nan')
+        msg.charge = float('nan')
+        msg.capacity = float('nan')
+        msg.design_capacity = float('nan')
+        msg.percentage = float('nan')
+        msg.power_supply_status = BatteryState.POWER_SUPPLY_STATUS_UNKNOWN
+        msg.power_supply_health = BatteryState.POWER_SUPPLY_HEALTH_UNKNOWN
+        msg.power_supply_technology = BatteryState.POWER_SUPPLY_TECHNOLOGY_LIPO
+        msg.present = mv > 1000  # <1V 视为没接电池/采样异常
+        self.battery_pub.publish(msg)
 
     def send_packet(self, func, data):
         if not self.ser:
@@ -337,25 +481,161 @@ class MentorPiBase(Node):
         odom.twist.covariance[35] = var_wz   # vyaw
         self.odom_pub.publish(odom)
 
+    def _on_param_update(self, params):
+        # 标定参数运行时热更新 (ros2 param set /mentorpi_base ...)
+        # 必须为正: 轮径/横移尺度。允许 0 (=关闭斜坡): accel_limit_*。
+        positive = {'wheel_diameter', 'vy_scale'}
+        non_negative = {'accel_limit_linear', 'accel_limit_angular',
+                        'guard_stop_distance', 'guard_slow_distance',
+                        'guard_scan_timeout', 'guard_ignore_radius',
+                        'guard_depth_stop_distance', 'guard_depth_offset_x'}
+        for p in params:
+            if p.name == 'obstacle_guard':
+                if not isinstance(p.value, bool):
+                    return SetParametersResult(
+                        successful=False, reason='obstacle_guard must be a bool')
+                self.obstacle_guard = p.value
+                self.get_logger().info(f'param obstacle_guard -> {p.value}')
+                continue
+            if p.name not in positive | non_negative:
+                continue
+            if not isinstance(p.value, float):
+                return SetParametersResult(
+                    successful=False, reason=f'{p.name} must be a float')
+            if p.value <= 0.0 and p.name in positive or p.value < 0.0:
+                return SetParametersResult(
+                    successful=False, reason=f'{p.name} out of range')
+            setattr(self, p.name, p.value)
+            self.get_logger().info(f'param {p.name} -> {p.value}')
+        return SetParametersResult(successful=True)
+
+    def _scan_cb(self, msg):
+        """四扇区最近障碍距离。laser_frame 与 base_link 同向 (静态 TF 无旋转),
+        角度 0 = 车头 +x。扇区各 90° (边界 ±45°/±135°),全 360° 无死角。"""
+        front = back = left = right = float('inf')
+        a = msg.angle_min
+        inc = msg.angle_increment
+        lo, hi = msg.range_min, msg.range_max
+        lo = max(lo, self.guard_ignore_radius)  # 滤掉车体自身结构
+        quarter = math.pi / 4.0
+        for r in msg.ranges:
+            ang = a
+            a += inc
+            if not (lo < r < hi) or not math.isfinite(r):
+                continue
+            ang = math.atan2(math.sin(ang), math.cos(ang))  # wrap [-pi, pi]
+            if -quarter <= ang <= quarter:
+                if r < front: front = r
+            elif ang > 3.0 * quarter or ang < -3.0 * quarter:
+                if r < back: back = r
+            elif ang > 0.0:
+                if r < left: left = r
+            else:
+                if r < right: right = r
+        self._scan_sectors = (front, back, left, right)
+        self._scan_time = time.monotonic()
+
+    def _depth_scan_cb(self, msg):
+        """前向低障虚拟激光 (相机系): 取全 FOV 最小距离,折算到底盘中心。"""
+        m = float('inf')
+        lo, hi = msg.range_min, msg.range_max
+        for r in msg.ranges:
+            if lo < r < hi and math.isfinite(r) and r < m:
+                m = r
+        self._depth_min = m + self.guard_depth_offset_x
+        self._depth_time = time.monotonic()
+
+    def _guard(self, vx, vy):
+        """按扇区障碍距离缩放平移分量。返回 (vx, vy, blocked_tuple)。"""
+        if not self.obstacle_guard or self._scan_sectors is None:
+            return vx, vy, ()
+        if time.monotonic() - self._scan_time > self.guard_scan_timeout:
+            return vx, vy, ()  # 雷达失联: 放行,不锁死
+        stop = self.guard_stop_distance
+        slow = max(self.guard_slow_distance, stop + 1e-3)
+        band = slow - stop
+
+        def scale(dist, stop_at=stop):
+            if dist <= stop_at:
+                return 0.0
+            if dist >= stop_at + band:
+                return 1.0
+            return (dist - stop_at) / band
+
+        front, back, left, right = self._scan_sectors
+        blocked = []
+        if vx > 0.0:
+            k = scale(front)
+            tag = 'front'
+            # 低障补盲 (深度相机只护前向); 停更即忽略,不锁死
+            if time.monotonic() - self._depth_time <= self.guard_scan_timeout:
+                kd = scale(self._depth_min, self.guard_depth_stop_distance)
+                if kd < k:
+                    k, tag = kd, 'front_low'
+            vx *= k
+            if k == 0.0: blocked.append(tag)
+        elif vx < 0.0:
+            k = scale(back)
+            vx *= k
+            if k == 0.0: blocked.append('back')
+        if vy > 0.0:  # ROS +y = 左
+            k = scale(left)
+            vy *= k
+            if k == 0.0: blocked.append('left')
+        elif vy < 0.0:
+            k = scale(right)
+            vy *= k
+            if k == 0.0: blocked.append('right')
+        return vx, vy, tuple(blocked)
+
     def cmd_vel_callback(self, msg):
+        self._raw_cmd = (msg.linear.x, msg.linear.y, msg.angular.z)
+        self.last_cmd_vel_time = self.get_clock().now()
+        if msg.linear.x != 0.0 or msg.linear.y != 0.0 or msg.angular.z != 0.0:
+            # 零偏估计的"停车"判据用: 最近一次非零运动指令的时刻
+            self._last_motion_time = time.monotonic()
+        self._apply_cmd()
+
+    def _guard_recheck(self):
+        """指令没变但障碍在靠近/远离时重估 (10Hz)。只在有活跃指令时做。"""
+        raw = self._raw_cmd
+        if raw == (0.0, 0.0, 0.0):
+            return
+        elapsed = (self.get_clock().now() - self.last_cmd_vel_time).nanoseconds / 1e9
+        if elapsed > self.cmd_vel_timeout:
+            return  # watchdog 的地盘
+        gvx, gvy, _ = self._guard(raw[0], raw[1])
+        avx, avy, _ = self._applied_cmd
+        if abs(gvx - avx) > 1e-3 or abs(gvy - avy) > 1e-3:
+            self._apply_cmd()
+
+    def _apply_cmd(self):
         # 麦克纳姆轮逆运动学 (官方参数)
         #        x
         # motor1 | ↑ | motor3
         #   +y-  |   |
         # motor2 |   | motor4
-        vx = msg.linear.x
-        vy = msg.linear.y
-        wz = msg.angular.z
+        raw_vx, raw_vy, wz = self._raw_cmd
+        vx, vy_raw, blocked = self._guard(raw_vx, raw_vy)
+        if blocked != self._blocked:
+            self._blocked = blocked
+            self.blocked_pub.publish(String(data=','.join(blocked)))
+            if blocked:
+                self.get_logger().warn(
+                    f"obstacle guard: blocking {','.join(blocked)} "
+                    f"(sectors={tuple(round(s, 2) for s in self._scan_sectors)})")
+        # 横移标定预缩(见 __init__): 只作用于电机指令。odom 积分(下方
+        # capture)用守卫后的指令 —— 电机实际执行的就是它。
+        vy = vy_raw * self.vy_scale
 
-        # Capture for odometry dead-reckoning
+        # Capture for odometry dead-reckoning (guard 后的值 = 物理真值)
         self.cmd_vx = vx
-        self.cmd_vy = vy
+        self.cmd_vy = vy_raw
         self.cmd_wz = wz
-        self.last_cmd_vel_time = self.get_clock().now()
 
         wheelbase = 0.1368      # 前后轴距
         track_width = 0.1410    # 左右轴距
-        wheel_diameter = 0.065  # 轮径
+        wheel_diameter = self.wheel_diameter  # 轮径(标定参数, 见 __init__)
 
         vp = wz * (wheelbase + track_width) / 2.0
 
@@ -374,6 +654,7 @@ class MentorPiBase(Node):
             [3, to_rps(m3)],
             [4, to_rps(m4)],
         ])
+        self._applied_cmd = (vx, vy_raw, wz)
 
     def watchdog_callback(self):
         # 串口断了就尝试重连, 重连后立即发停车
@@ -391,6 +672,8 @@ class MentorPiBase(Node):
                 self.cmd_vx = 0.0
                 self.cmd_vy = 0.0
                 self.cmd_wz = 0.0
+                self._raw_cmd = (0.0, 0.0, 0.0)
+                self._applied_cmd = (0.0, 0.0, 0.0)
                 self.set_motor_speed([[1, 0], [2, 0], [3, 0], [4, 0]])
             except Exception:
                 self.ser = None  # 还连不上, 下次再试
@@ -406,6 +689,8 @@ class MentorPiBase(Node):
                 self.cmd_vx = 0.0
                 self.cmd_vy = 0.0
                 self.cmd_wz = 0.0
+                self._raw_cmd = (0.0, 0.0, 0.0)
+                self._applied_cmd = (0.0, 0.0, 0.0)
                 self.set_motor_speed([[1, 0], [2, 0], [3, 0], [4, 0]])
 
     def gimbal_callback(self, msg):
