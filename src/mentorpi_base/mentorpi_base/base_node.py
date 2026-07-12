@@ -153,10 +153,15 @@ class MentorPiBase(Node):
         self.declare_parameter('guard_stop_distance', 0.30)   # m, 分量清零
         self.declare_parameter('guard_slow_distance', 0.60)   # m, 开始减速
         self.declare_parameter('guard_scan_timeout', 1.0)     # s, 雷达失联放行
+        # 自体遮挡过滤: 雷达能看到车尾自身结构 (实测 ±160~175° 一簇
+        # 0.11~0.13m 的点, 随车旋转不动 → 是自己)。比该半径近的点全部
+        # 忽略, 否则倒车永久被"自己"挡住。
+        self.declare_parameter('guard_ignore_radius', 0.16)   # m
         self.obstacle_guard = self.get_parameter('obstacle_guard').value
         self.guard_stop_distance = self.get_parameter('guard_stop_distance').value
         self.guard_slow_distance = self.get_parameter('guard_slow_distance').value
         self.guard_scan_timeout = self.get_parameter('guard_scan_timeout').value
+        self.guard_ignore_radius = self.get_parameter('guard_ignore_radius').value
         # 四扇区最近障碍 (front/back/left/right, 各 90° 无死角覆盖)
         self._scan_sectors = None
         self._scan_time = 0.0
@@ -463,7 +468,7 @@ class MentorPiBase(Node):
         positive = {'wheel_diameter', 'vy_scale'}
         non_negative = {'accel_limit_linear', 'accel_limit_angular',
                         'guard_stop_distance', 'guard_slow_distance',
-                        'guard_scan_timeout'}
+                        'guard_scan_timeout', 'guard_ignore_radius'}
         for p in params:
             if p.name == 'obstacle_guard':
                 if not isinstance(p.value, bool):
@@ -491,6 +496,7 @@ class MentorPiBase(Node):
         a = msg.angle_min
         inc = msg.angle_increment
         lo, hi = msg.range_min, msg.range_max
+        lo = max(lo, self.guard_ignore_radius)  # 滤掉车体自身结构
         quarter = math.pi / 4.0
         for r in msg.ranges:
             ang = a
