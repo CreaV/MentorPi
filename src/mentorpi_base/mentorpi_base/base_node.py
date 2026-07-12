@@ -128,6 +128,17 @@ class MentorPiBase(Node):
         # 标定参数支持运行时 ros2 param set 即时生效(微调不用重启)。
         self.add_on_set_parameters_callback(self._on_param_update)
 
+        # 陀螺仪零偏在线估计。2026-07-12 实测静止零偏 gz ≈ +0.28°/s:
+        # EKF 直接融合 vyaw 会把零偏积分成 ~15°/min 的持续"自转",
+        # 定位模式下 yaw 先验越滑越远,激光相对地图整体旋转。
+        # 停车(指令为零 >0.5s 且角速率接近当前零偏,即没被手搬)时
+        # 用 EMA 学习零偏,发布 /imu/data_raw 前扣除。
+        self.declare_parameter('gyro_bias_estimation', True)
+        self.gyro_bias_estimation = self.get_parameter('gyro_bias_estimation').value
+        self._gyro_bias = [0.0, 0.0, 0.0]
+        self._gyro_bias_n = 0
+        self._last_motion_time = 0.0
+
         self.declare_parameter('publish_odom_tf', False)
         self.publish_odom_tf = self.get_parameter('publish_odom_tf').value
 
@@ -247,9 +258,35 @@ class MentorPiBase(Node):
         ]
 
         # Gyroscope: deg/s -> rad/s
-        msg.angular_velocity.x = math.radians(gx)
-        msg.angular_velocity.y = math.radians(gy)
-        msg.angular_velocity.z = math.radians(gz)
+        gx_r = math.radians(gx)
+        gy_r = math.radians(gy)
+        gz_r = math.radians(gz)
+
+        if self.gyro_bias_estimation:
+            # 前 500 样本 (~10s) 快速收敛,之后等效时间常数 ~10s@50Hz,
+            # 缓慢跟踪温漂。0.05 rad/s (~3°/s) 门限挡住手搬/外力扰动。
+            if (self.cmd_vx == 0.0 and self.cmd_vy == 0.0 and self.cmd_wz == 0.0
+                    and time.monotonic() - self._last_motion_time > 0.5
+                    and abs(gx_r - self._gyro_bias[0]) < 0.05
+                    and abs(gy_r - self._gyro_bias[1]) < 0.05
+                    and abs(gz_r - self._gyro_bias[2]) < 0.05):
+                self._gyro_bias_n += 1
+                k = 1.0 / min(self._gyro_bias_n, 500)
+                self._gyro_bias[0] += k * (gx_r - self._gyro_bias[0])
+                self._gyro_bias[1] += k * (gy_r - self._gyro_bias[1])
+                self._gyro_bias[2] += k * (gz_r - self._gyro_bias[2])
+                if self._gyro_bias_n == 100:
+                    b = self._gyro_bias
+                    self.get_logger().info(
+                        f"gyro bias locked: [{math.degrees(b[0]):+.3f}, "
+                        f"{math.degrees(b[1]):+.3f}, {math.degrees(b[2]):+.3f}] deg/s")
+            gx_r -= self._gyro_bias[0]
+            gy_r -= self._gyro_bias[1]
+            gz_r -= self._gyro_bias[2]
+
+        msg.angular_velocity.x = gx_r
+        msg.angular_velocity.y = gy_r
+        msg.angular_velocity.z = gz_r
         msg.angular_velocity_covariance = [
             0.01, 0.0, 0.0,
             0.0, 0.01, 0.0,
@@ -425,6 +462,9 @@ class MentorPiBase(Node):
         self.cmd_vy = msg.linear.y
         self.cmd_wz = wz
         self.last_cmd_vel_time = self.get_clock().now()
+        if vx != 0.0 or vy != 0.0 or wz != 0.0:
+            # 零偏估计的"停车"判据用: 最近一次非零运动指令的时刻
+            self._last_motion_time = time.monotonic()
 
         wheelbase = 0.1368      # 前后轴距
         track_width = 0.1410    # 左右轴距

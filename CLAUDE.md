@@ -194,6 +194,7 @@ Architecture: **base 常驻 + 模式按需挂载**。`base.launch.py` 在 `remot
 | `publish_odom_tf` | `False` | Publish odom→base_link TF (disable when EKF handles it) |
 | `accel_limit_linear` | `1.5` m/s² | odom 积分用的底盘加速度斜坡模型（cmd_vel 是阶跃,底盘不是;0=关闭直接积分指令） |
 | `accel_limit_angular` | `10.0` rad/s² | 同上,角加速度 |
+| `gyro_bias_estimation` | `True` | 停车时在线估计陀螺仪零偏并在 `/imu/data_raw` 中扣除。实测零偏 gz≈+0.28°/s,不扣会被 EKF 积成 ~15°/min 的 yaw 漂移(定位模式下激光相对地图整体旋转) |
 
 **里程计协方差**:`/odom` 的 **twist** 协方差才是 EKF 实际消费的(融合 vx/vy)。运动时 vx=0.02、vy=0.05(横移打滑更狠)、vyaw=0.2(原地旋转打滑最狠,EKF 已改为不融合它,yaw 率来自陀螺仪);静止时 1e-6 锁死漂移。
 
