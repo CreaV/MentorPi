@@ -23,9 +23,9 @@
         "frame:base_link": {"visible": true}
       },
       "topics": {
-        "/rtabmap/grid_map": {"visible": true, "colorMode": "custom", "minColor": "#ffffff", "maxColor": "#000000", "unknownColor": "#88888844"},
+        "/map": {"visible": true, "colorMode": "custom", "minColor": "#ffffff", "maxColor": "#000000", "unknownColor": "#88888844"},
         "/scan": {"visible": true, "colorMode": "flat", "flatColor": "#ff3333", "pointSize": 4},
-        "/rtabmap/localization_pose": {"visible": true, "type": "arrow", "color": "#33ddff", "showCovariance": true, "covarianceColor": "#33ddff33"},
+        "/localization_pose": {"visible": true, "type": "arrow", "color": "#33ddff", "showCovariance": true, "covarianceColor": "#33ddff33"},
         "/odometry/filtered": {"visible": false}
       },
       "layers": {}
@@ -81,7 +81,7 @@
       "buttonColor": "#888888"
     },
     "RawMessages!pose": {
-      "topicPath": "/rtabmap/localization_pose.pose.pose.position"
+      "topicPath": "/localization_pose.pose.pose.position"
     }
   },
   "globalVariables": {},
