@@ -3,8 +3,10 @@ from rclpy.node import Node
 from rcl_interfaces.msg import SetParametersResult
 from geometry_msgs.msg import Twist, TransformStamped, Quaternion
 from nav_msgs.msg import Odometry
-from sensor_msgs.msg import Imu, BatteryState
+from sensor_msgs.msg import Imu, BatteryState, LaserScan
+from std_msgs.msg import String
 from mentorpi_msgs.msg import Gimbal, MotorStatus, Buzzer
+from rclpy.qos import qos_profile_sensor_data
 from tf2_ros import TransformBroadcaster
 import serial
 import struct
@@ -138,6 +140,34 @@ class MentorPiBase(Node):
         self._gyro_bias = [0.0, 0.0, 0.0]
         self._gyro_bias_n = 0
         self._last_motion_time = 0.0
+
+        # 激光避障兜底 (obstacle guard)。所有 /cmd_vel(手柄/手机/Foxglove/
+        # VLA 原语)都经 base_node 变成电机指令,这里是唯一咽喉。
+        # 只拦截"撞向障碍"的平移分量: 障碍进入 slow 距离线性减速,
+        # 进入 stop 距离清零该分量;其余方向和原地旋转不受影响,
+        # 所以被墙挡住后仍可倒车/横移/转身脱困。
+        # 雷达数据停更 (>guard_scan_timeout) 时自动放行——安全网退化,
+        # 但不会把车锁死。距离从雷达中心起算 (车身半径 ~0.15m 已含在
+        # stop 默认值里)。
+        self.declare_parameter('obstacle_guard', True)
+        self.declare_parameter('guard_stop_distance', 0.30)   # m, 分量清零
+        self.declare_parameter('guard_slow_distance', 0.60)   # m, 开始减速
+        self.declare_parameter('guard_scan_timeout', 1.0)     # s, 雷达失联放行
+        self.obstacle_guard = self.get_parameter('obstacle_guard').value
+        self.guard_stop_distance = self.get_parameter('guard_stop_distance').value
+        self.guard_slow_distance = self.get_parameter('guard_slow_distance').value
+        self.guard_scan_timeout = self.get_parameter('guard_scan_timeout').value
+        # 四扇区最近障碍 (front/back/left/right, 各 90° 无死角覆盖)
+        self._scan_sectors = None
+        self._scan_time = 0.0
+        self._raw_cmd = (0.0, 0.0, 0.0)   # 最近一次 /cmd_vel 原始值
+        self._applied_cmd = (0.0, 0.0, 0.0)
+        self._blocked = ()
+        self.create_subscription(LaserScan, '/scan', self._scan_cb,
+                                 qos_profile_sensor_data)
+        self.blocked_pub = self.create_publisher(String, '/guard/blocked', 1)
+        # 指令不变但墙在靠近的场景 (手柄持续held / 原语 20Hz 流): 10Hz 复核
+        self.create_timer(0.1, self._guard_recheck)
 
         self.declare_parameter('publish_odom_tf', False)
         self.publish_odom_tf = self.get_parameter('publish_odom_tf').value
@@ -431,8 +461,17 @@ class MentorPiBase(Node):
         # 标定参数运行时热更新 (ros2 param set /mentorpi_base ...)
         # 必须为正: 轮径/横移尺度。允许 0 (=关闭斜坡): accel_limit_*。
         positive = {'wheel_diameter', 'vy_scale'}
-        non_negative = {'accel_limit_linear', 'accel_limit_angular'}
+        non_negative = {'accel_limit_linear', 'accel_limit_angular',
+                        'guard_stop_distance', 'guard_slow_distance',
+                        'guard_scan_timeout'}
         for p in params:
+            if p.name == 'obstacle_guard':
+                if not isinstance(p.value, bool):
+                    return SetParametersResult(
+                        successful=False, reason='obstacle_guard must be a bool')
+                self.obstacle_guard = p.value
+                self.get_logger().info(f'param obstacle_guard -> {p.value}')
+                continue
             if p.name not in positive | non_negative:
                 continue
             if not isinstance(p.value, float):
@@ -445,26 +484,111 @@ class MentorPiBase(Node):
             self.get_logger().info(f'param {p.name} -> {p.value}')
         return SetParametersResult(successful=True)
 
+    def _scan_cb(self, msg):
+        """四扇区最近障碍距离。laser_frame 与 base_link 同向 (静态 TF 无旋转),
+        角度 0 = 车头 +x。扇区各 90° (边界 ±45°/±135°),全 360° 无死角。"""
+        front = back = left = right = float('inf')
+        a = msg.angle_min
+        inc = msg.angle_increment
+        lo, hi = msg.range_min, msg.range_max
+        quarter = math.pi / 4.0
+        for r in msg.ranges:
+            ang = a
+            a += inc
+            if not (lo < r < hi) or not math.isfinite(r):
+                continue
+            ang = math.atan2(math.sin(ang), math.cos(ang))  # wrap [-pi, pi]
+            if -quarter <= ang <= quarter:
+                if r < front: front = r
+            elif ang > 3.0 * quarter or ang < -3.0 * quarter:
+                if r < back: back = r
+            elif ang > 0.0:
+                if r < left: left = r
+            else:
+                if r < right: right = r
+        self._scan_sectors = (front, back, left, right)
+        self._scan_time = time.monotonic()
+
+    def _guard(self, vx, vy):
+        """按扇区障碍距离缩放平移分量。返回 (vx, vy, blocked_tuple)。"""
+        if not self.obstacle_guard or self._scan_sectors is None:
+            return vx, vy, ()
+        if time.monotonic() - self._scan_time > self.guard_scan_timeout:
+            return vx, vy, ()  # 雷达失联: 放行,不锁死
+        stop = self.guard_stop_distance
+        slow = max(self.guard_slow_distance, stop + 1e-3)
+
+        def scale(dist):
+            if dist <= stop:
+                return 0.0
+            if dist >= slow:
+                return 1.0
+            return (dist - stop) / (slow - stop)
+
+        front, back, left, right = self._scan_sectors
+        blocked = []
+        if vx > 0.0:
+            k = scale(front)
+            vx *= k
+            if k == 0.0: blocked.append('front')
+        elif vx < 0.0:
+            k = scale(back)
+            vx *= k
+            if k == 0.0: blocked.append('back')
+        if vy > 0.0:  # ROS +y = 左
+            k = scale(left)
+            vy *= k
+            if k == 0.0: blocked.append('left')
+        elif vy < 0.0:
+            k = scale(right)
+            vy *= k
+            if k == 0.0: blocked.append('right')
+        return vx, vy, tuple(blocked)
+
     def cmd_vel_callback(self, msg):
+        self._raw_cmd = (msg.linear.x, msg.linear.y, msg.angular.z)
+        self.last_cmd_vel_time = self.get_clock().now()
+        if msg.linear.x != 0.0 or msg.linear.y != 0.0 or msg.angular.z != 0.0:
+            # 零偏估计的"停车"判据用: 最近一次非零运动指令的时刻
+            self._last_motion_time = time.monotonic()
+        self._apply_cmd()
+
+    def _guard_recheck(self):
+        """指令没变但障碍在靠近/远离时重估 (10Hz)。只在有活跃指令时做。"""
+        raw = self._raw_cmd
+        if raw == (0.0, 0.0, 0.0):
+            return
+        elapsed = (self.get_clock().now() - self.last_cmd_vel_time).nanoseconds / 1e9
+        if elapsed > self.cmd_vel_timeout:
+            return  # watchdog 的地盘
+        gvx, gvy, _ = self._guard(raw[0], raw[1])
+        avx, avy, _ = self._applied_cmd
+        if abs(gvx - avx) > 1e-3 or abs(gvy - avy) > 1e-3:
+            self._apply_cmd()
+
+    def _apply_cmd(self):
         # 麦克纳姆轮逆运动学 (官方参数)
         #        x
         # motor1 | ↑ | motor3
         #   +y-  |   |
         # motor2 |   | motor4
-        vx = msg.linear.x
+        raw_vx, raw_vy, wz = self._raw_cmd
+        vx, vy_raw, blocked = self._guard(raw_vx, raw_vy)
+        if blocked != self._blocked:
+            self._blocked = blocked
+            self.blocked_pub.publish(String(data=','.join(blocked)))
+            if blocked:
+                self.get_logger().warn(
+                    f"obstacle guard: blocking {','.join(blocked)} "
+                    f"(sectors={tuple(round(s, 2) for s in self._scan_sectors)})")
         # 横移标定预缩(见 __init__): 只作用于电机指令。odom 积分(下方
-        # capture)用原始指令 —— 预缩后物理位移 = 原始指令值。
-        vy = msg.linear.y * self.vy_scale
-        wz = msg.angular.z
+        # capture)用守卫后的指令 —— 电机实际执行的就是它。
+        vy = vy_raw * self.vy_scale
 
-        # Capture for odometry dead-reckoning
+        # Capture for odometry dead-reckoning (guard 后的值 = 物理真值)
         self.cmd_vx = vx
-        self.cmd_vy = msg.linear.y
+        self.cmd_vy = vy_raw
         self.cmd_wz = wz
-        self.last_cmd_vel_time = self.get_clock().now()
-        if vx != 0.0 or vy != 0.0 or wz != 0.0:
-            # 零偏估计的"停车"判据用: 最近一次非零运动指令的时刻
-            self._last_motion_time = time.monotonic()
 
         wheelbase = 0.1368      # 前后轴距
         track_width = 0.1410    # 左右轴距
@@ -487,6 +611,7 @@ class MentorPiBase(Node):
             [3, to_rps(m3)],
             [4, to_rps(m4)],
         ])
+        self._applied_cmd = (vx, vy_raw, wz)
 
     def watchdog_callback(self):
         # 串口断了就尝试重连, 重连后立即发停车
@@ -504,6 +629,8 @@ class MentorPiBase(Node):
                 self.cmd_vx = 0.0
                 self.cmd_vy = 0.0
                 self.cmd_wz = 0.0
+                self._raw_cmd = (0.0, 0.0, 0.0)
+                self._applied_cmd = (0.0, 0.0, 0.0)
                 self.set_motor_speed([[1, 0], [2, 0], [3, 0], [4, 0]])
             except Exception:
                 self.ser = None  # 还连不上, 下次再试
@@ -519,6 +646,8 @@ class MentorPiBase(Node):
                 self.cmd_vx = 0.0
                 self.cmd_vy = 0.0
                 self.cmd_wz = 0.0
+                self._raw_cmd = (0.0, 0.0, 0.0)
+                self._applied_cmd = (0.0, 0.0, 0.0)
                 self.set_motor_speed([[1, 0], [2, 0], [3, 0], [4, 0]])
 
     def gimbal_callback(self, msg):

@@ -196,6 +196,7 @@ Architecture: **base 常驻 + 模式按需挂载**。`base.launch.py` 在 `remot
 | `accel_limit_linear` | `1.5` m/s² | odom 积分用的底盘加速度斜坡模型（cmd_vel 是阶跃,底盘不是;0=关闭直接积分指令） |
 | `accel_limit_angular` | `10.0` rad/s² | 同上,角加速度 |
 | `gyro_bias_estimation` | `True` | 停车时在线估计陀螺仪零偏并在 `/imu/data_raw` 中扣除。实测零偏 gz≈+0.28°/s,不扣会被 EKF 积成 ~15°/min 的 yaw 漂移(定位模式下激光相对地图整体旋转) |
+| `obstacle_guard` | `True` | 激光避障兜底:订 `/scan` 算前/后/左/右四扇区(各 90°)最近障碍,"撞向障碍"的平移分量在 `guard_slow_distance`(0.6m)内线性减速、`guard_stop_distance`(0.3m,从雷达中心起算)内清零。只拦危险分量——被挡后仍可倒车/横移/旋转脱困。拦截所有 cmd_vel 来源(手柄/手机/Foxglove/VLA)。阻挡状态发 `/guard/blocked`(std_msgs/String,方向逗号连接,空=放行)。雷达停更 >`guard_scan_timeout`(1s)自动放行。全部参数热更新 |
 
 **里程计协方差**:`/odom` 的 **twist** 协方差才是 EKF 实际消费的(融合 vx/vy)。运动时 vx=0.02、vy=0.05(横移打滑更狠)、vyaw=0.2(原地旋转打滑最狠,EKF 已改为不融合它,yaw 率来自陀螺仪);静止时 1e-6 锁死漂移。
 
