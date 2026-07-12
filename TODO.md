@@ -125,10 +125,14 @@
       学习,发布前扣除)。修后用户确认"定位比较贴合"。
 - [x] 里程计残余·gyro 零偏自估计:同上,已实现(`gyro_bias_estimation`
       参数,默认开)。麦轮横移打滑 ±5% 仍是修正间隙漂移的下限来源。
-- [ ] **AprilTag 相机外参精标**(下一刀,消恒定小偏差):打印 36h11
-      tag(≥10cm)平贴地面,车绕 tag 多角度采集,解 PnP 得
-      base_link→camera 精确外参(含俯仰角,粗标时假设了 0)。
-      观察依据:走一圈回起点看红点相对蓝墙有无恒定错位。
+- [x] **AprilTag 相机外参精标**(2026-07-12 完成,scripts/
+      calibrate_camera_extrinsic.py):平板全屏显示 tag36h11(黑框实测
+      117.5mm),小车自动采集(弧站+测距规划直线站),位置-only 手眼求解,
+      3 组数据中位数:光心 x=0.085(壳測 0.143)、y=0.023、yaw -2.4°、
+      pitch +0.9°、roll -0.2°,已部署 base.launch.py。z=0.095 尺量固定
+      (平面运动不可观)。踩坑记录见脚本 docstring 与 commit。
+      **注意:现有 rtabmap.db 是旧外参建的,下次白天增量重扫后相机-激光
+      一致性才完全兑现。**
 - [ ] **白天增量续图增厚地图**:`slam_3d` + 同 db + `load_all_nodes:=true`
       再扫 5-10 分钟(多角度、多回环),锚点密度翻倍。注意 supervisor
       /mode/set 尚不透传 load_all_nodes(需 CLI 或加字段)。
