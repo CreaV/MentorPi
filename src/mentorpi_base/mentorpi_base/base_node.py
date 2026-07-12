@@ -6,7 +6,8 @@ from nav_msgs.msg import Odometry
 from sensor_msgs.msg import Imu, BatteryState, LaserScan
 from std_msgs.msg import String
 from mentorpi_msgs.msg import Gimbal, MotorStatus, Buzzer
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import (qos_profile_sensor_data, QoSProfile,
+                       ReliabilityPolicy, DurabilityPolicy)
 from tf2_ros import TransformBroadcaster
 import serial
 import struct
@@ -157,20 +158,38 @@ class MentorPiBase(Node):
         # 0.11~0.13m 的点, 随车旋转不动 → 是自己)。比该半径近的点全部
         # 忽略, 否则倒车永久被"自己"挡住。
         self.declare_parameter('guard_ignore_radius', 0.16)   # m
+        # 前向低障补盲: 2D 雷达看不见 <0.18m 的障碍, /depth_scan (深度相机
+        # 光轴高度带的虚拟激光, 见 camera.launch.py) 只护前向。深度相机
+        # 近距失效 (~0.2m 以内无深度), 所以低障的停止线放远到 0.45m
+        # (从底盘中心, 含相机前置偏移), 在深度还可靠的距离就拦停,
+        # 避免"太近看不见→放行→蹭上去"的爬行。
+        self.declare_parameter('guard_depth_stop_distance', 0.45)  # m, 从底盘中心
+        self.declare_parameter('guard_depth_offset_x', 0.143)      # 相机在中心前方
         self.obstacle_guard = self.get_parameter('obstacle_guard').value
         self.guard_stop_distance = self.get_parameter('guard_stop_distance').value
         self.guard_slow_distance = self.get_parameter('guard_slow_distance').value
         self.guard_scan_timeout = self.get_parameter('guard_scan_timeout').value
         self.guard_ignore_radius = self.get_parameter('guard_ignore_radius').value
+        self.guard_depth_stop_distance = self.get_parameter('guard_depth_stop_distance').value
+        self.guard_depth_offset_x = self.get_parameter('guard_depth_offset_x').value
         # 四扇区最近障碍 (front/back/left/right, 各 90° 无死角覆盖)
         self._scan_sectors = None
         self._scan_time = 0.0
+        self._depth_min = float('inf')   # 低障虚拟激光最近距离 (已折算到底盘中心)
+        self._depth_time = 0.0
         self._raw_cmd = (0.0, 0.0, 0.0)   # 最近一次 /cmd_vel 原始值
         self._applied_cmd = (0.0, 0.0, 0.0)
         self._blocked = ()
         self.create_subscription(LaserScan, '/scan', self._scan_cb,
                                  qos_profile_sensor_data)
-        self.blocked_pub = self.create_publisher(String, '/guard/blocked', 1)
+        self.create_subscription(LaserScan, '/depth_scan', self._depth_scan_cb,
+                                 qos_profile_sensor_data)
+        # latched: 晚订阅的客户端 (Foxglove/VLA) 一连上就能拿到当前状态
+        self.blocked_pub = self.create_publisher(
+            String, '/guard/blocked',
+            QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
+                       durability=DurabilityPolicy.TRANSIENT_LOCAL))
+        self.blocked_pub.publish(String(data=''))
         # 指令不变但墙在靠近的场景 (手柄持续held / 原语 20Hz 流): 10Hz 复核
         self.create_timer(0.1, self._guard_recheck)
 
@@ -468,7 +487,8 @@ class MentorPiBase(Node):
         positive = {'wheel_diameter', 'vy_scale'}
         non_negative = {'accel_limit_linear', 'accel_limit_angular',
                         'guard_stop_distance', 'guard_slow_distance',
-                        'guard_scan_timeout', 'guard_ignore_radius'}
+                        'guard_scan_timeout', 'guard_ignore_radius',
+                        'guard_depth_stop_distance', 'guard_depth_offset_x'}
         for p in params:
             if p.name == 'obstacle_guard':
                 if not isinstance(p.value, bool):
@@ -515,6 +535,16 @@ class MentorPiBase(Node):
         self._scan_sectors = (front, back, left, right)
         self._scan_time = time.monotonic()
 
+    def _depth_scan_cb(self, msg):
+        """前向低障虚拟激光 (相机系): 取全 FOV 最小距离,折算到底盘中心。"""
+        m = float('inf')
+        lo, hi = msg.range_min, msg.range_max
+        for r in msg.ranges:
+            if lo < r < hi and math.isfinite(r) and r < m:
+                m = r
+        self._depth_min = m + self.guard_depth_offset_x
+        self._depth_time = time.monotonic()
+
     def _guard(self, vx, vy):
         """按扇区障碍距离缩放平移分量。返回 (vx, vy, blocked_tuple)。"""
         if not self.obstacle_guard or self._scan_sectors is None:
@@ -523,20 +553,27 @@ class MentorPiBase(Node):
             return vx, vy, ()  # 雷达失联: 放行,不锁死
         stop = self.guard_stop_distance
         slow = max(self.guard_slow_distance, stop + 1e-3)
+        band = slow - stop
 
-        def scale(dist):
-            if dist <= stop:
+        def scale(dist, stop_at=stop):
+            if dist <= stop_at:
                 return 0.0
-            if dist >= slow:
+            if dist >= stop_at + band:
                 return 1.0
-            return (dist - stop) / (slow - stop)
+            return (dist - stop_at) / band
 
         front, back, left, right = self._scan_sectors
         blocked = []
         if vx > 0.0:
             k = scale(front)
+            tag = 'front'
+            # 低障补盲 (深度相机只护前向); 停更即忽略,不锁死
+            if time.monotonic() - self._depth_time <= self.guard_scan_timeout:
+                kd = scale(self._depth_min, self.guard_depth_stop_distance)
+                if kd < k:
+                    k, tag = kd, 'front_low'
             vx *= k
-            if k == 0.0: blocked.append('front')
+            if k == 0.0: blocked.append(tag)
         elif vx < 0.0:
             k = scale(back)
             vx *= k

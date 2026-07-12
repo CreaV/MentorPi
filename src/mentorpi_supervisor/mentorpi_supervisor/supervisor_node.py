@@ -138,7 +138,8 @@ class SupervisorNode(Node):
         try:
             self._stop_active()
             if target != 'idle':
-                self._start_mode(target, request.map_file, request.database_path)
+                self._start_mode(target, request.map_file, request.database_path,
+                                 request.load_all_nodes)
             with self._lock:
                 self._current_mode = target
             self._publish_status()
@@ -180,12 +181,18 @@ class SupervisorNode(Node):
 
     # ------- subprocess lifecycle -------
 
-    def _start_mode(self, mode: str, map_file: str, database_path: str):
+    def _start_mode(self, mode: str, map_file: str, database_path: str,
+                    load_all_nodes: bool = False):
         cmd = ['ros2', 'launch', 'mentorpi_bringup', f'{mode}.launch.py']
         if mode == 'loc_2d':
             cmd.append(f'map_file:={map_file}')
         elif mode in ('slam_3d', 'loc_3d'):
             cmd.append(f'database_path:={database_path or DEFAULT_RTABMAP_DB}')
+            # 增量续图: 旧图节点全载入 WM, 开局即重定位合并 (勿漂移等回环)。
+            # loc_3d 的 launch 里本来就是 InitWMWithAllNodes=true, 只对
+            # slam_3d 有意义。
+            if mode == 'slam_3d' and load_all_nodes:
+                cmd.append('load_all_nodes:=true')
 
         self.get_logger().info(f'launching: {" ".join(cmd)}')
         # start_new_session=True puts the launch and all its children in a new

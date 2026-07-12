@@ -1,10 +1,15 @@
 # Request: switch the supervisor to a target mode.
-# mode: one of "idle", "slam_2d", "slam_3d", "loc_2d"
+# mode: one of "idle", "slam_2d", "slam_3d", "loc_2d", "loc_3d"
 # map_file: required when mode == "loc_2d" (path without .posegraph extension)
-# database_path: optional override for "slam_3d" rtabmap database (default ~/rtabmap_maps/rtabmap.db)
+# database_path: optional override for "slam_3d"/"loc_3d" rtabmap database (default ~/rtabmap_maps/rtabmap.db)
+# load_all_nodes: slam_3d only — load the whole existing db into working
+#   memory at start (Mem/InitWMWithAllNodes), so an incremental mapping
+#   session relocalizes and merges immediately instead of drifting until
+#   the first loop closure. Ignored by other modes.
 string mode
 string map_file
 string database_path
+bool load_all_nodes
 ---
 bool success
 string message

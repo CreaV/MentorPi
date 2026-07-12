@@ -459,6 +459,7 @@ unit 文件在 `scripts/mentorpi-remote.service`,关键点:
 - `mode`:必填
 - `map_file`:`loc_2d` 必填(slam_toolbox 路径不带扩展名,如 `/home/pi/maps/my_room`)
 - `database_path`:`slam_3d`/`loc_3d` 可选,默认 `~/rtabmap_maps/rtabmap.db`
+- `load_all_nodes`:`slam_3d` 增量续图用——旧图节点全载入 WM,开局即重定位合并(其余模式忽略)
 
 **安全模型**:第一版裸跑,假设局域网可信(无认证)。生产部署需要在 foxglove_bridge 前加 nginx + TLS + basic auth,或开 `ros-jazzy-foxglove-bridge` 的 TLS。
 
