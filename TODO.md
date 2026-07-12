@@ -157,9 +157,9 @@
 
 ## 4.5 今日遗留问题（2026-07-05 晚，按优先级）
 
-- [ ] **验证 USB hub 供电拓扑**：相机已确认挂 hub 5000M 链路 ✓；跑一段
-      遥控看 `journalctl -k -f | grep over-current` 是否清零；雷达是
-      串口供电（不走 USB 5V，之前的功率账要修正）。
+- [x] **验证 USB hub 供电拓扑**(2026-07-12)：相机挂 hub 5000M 链路 ✓;
+      整个白天多轮驱动(VLA 任务、原语冲墙测试、推箱)后 dmesg
+      over-current = 0 ✓。雷达是串口供电(不走 USB 5V)。
 - [ ] **supervisor 开机死锁**（一次复现）：18:00 boot 实例发完 startup
       chime 后主线程 futex 死锁，服务调用永挂。当时带
       ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST（已撤销），可能相关。
@@ -176,13 +176,13 @@
       的场景(需冷启)仍是残余风险,遇到再说。
 - [ ] STM32 电源开关状态检查提示：/battery ≈4.4V + IMU 活 + 电机不转 =
       开关没开（见 docs/power_troubleshooting.md）。
-- [ ] **避障兜底的矮障碍盲区**(2026-07-12 实测)：base_node 激光守卫
-      已上线并验收(冲墙 1m 在 0.29m 拦停),但 2D 雷达装在 0.18m 高,
-      **低于 18cm 的障碍物理不可见**(平放纸箱实测被推着走)。补盲方案:
-      depth 相机前向低障检测(depthimage_to_laserscan 取地面上方
-      0.03~0.18m 高度带 → 合成 scan 并入守卫 front 扇区;相机常驻,
-      增量 CPU 需实测)。脚/门槛/矮箱是主要撞击源,优先级中高。
-- [ ] /guard/blocked 改 transient_local(晚订阅者看不到当前状态)。
+- [x] **避障兜底的矮障碍盲区**(2026-07-12 当天补完)：
+      depthimage_to_laserscan 取深度光轴 ±4° 高度带(距地 ~5-14cm)→
+      `/depth_scan`(13Hz, 5.6% CPU),base_node 守卫并入前向扇区,
+      低障停止线 0.45m(深度相机 0.2m 内无回波,须在还看得见时拦停)。
+      深度流停更自动退化为纯激光。已实车验证拦停。侧/后方向仍只有
+      激光(相机只朝前),VLA 提示词已告知模型自行避让矮障。
+- [x] /guard/blocked 改 transient_local(初始发布 '',晚订阅立即可读)。
 
 ## 5. 部署 / 安全
 
