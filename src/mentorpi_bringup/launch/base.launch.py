@@ -113,15 +113,18 @@ def generate_launch_description():
             arguments=['0', '0', '0.05', '0', '0', '0', 'base_link', 'imu_link'],
         ),
 
-        # base_link -> camera_link. 尺子粗标 2026-07-05: 外壳中心距轮轴
-        # 中点前方 14.3cm、离地 9.5cm、无俯仰。镜头光心级精度由 orbbec
-        # driver 的出厂标定 TF (camera_link -> *_optical_frame) 负责,
-        # 残余误差待 AprilTag 精标 (docs/calibration.md Part 3)。
+        # base_link -> camera_link. AprilTag 手眼精标 2026-07-12
+        # (scripts/calibrate_camera_extrinsic.py, 平板显示 tag36h11,
+        # 3 组独立数据取中位数, 位置-only 残差 ~9mm):
+        # 光心比外壳尺量值靠后 (x 0.143→0.085), 相机装偏: 左移 2.3cm、
+        # 朝向偏右 2.4°、微低头 0.9°。z 用尺量值固定 (平面运动不可观测)。
         Node(
             package='tf2_ros',
             executable='static_transform_publisher',
             name='base_to_camera',
-            arguments=['0.143', '0', '0.095', '0', '0', '0', 'base_link', 'camera_link'],
+            arguments=['0.0846', '0.0231', '0.095',
+                       '-0.0422', '0.0149', '-0.0032',
+                       'base_link', 'camera_link'],
         ),
 
         # MS200 lidar

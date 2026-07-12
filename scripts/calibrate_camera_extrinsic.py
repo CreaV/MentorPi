@@ -88,13 +88,39 @@ class Robot:
         data = msg["data"]
         return base64.b64decode(data) if isinstance(data, str) else bytes(data)
 
-    async def odom(self):
+    async def _odom_raw(self, topic="/odometry/filtered"):
         msg = await self.client.subscribe_once(
-            "/odometry/filtered", "nav_msgs/msg/Odometry", timeout=5)
+            topic, "nav_msgs/msg/Odometry", timeout=5)
         p = msg["pose"]["pose"]["position"]
         q = msg["pose"]["pose"]["orientation"]
         return quat_xyzw_to_mat([q["x"], q["y"], q["z"], q["w"]],
                                 [p["x"], p["y"], p["z"]])
+
+    async def odom(self, topic="/odometry/filtered"):
+        """rosbridge 的 subscribe 会交付陈旧/乱序消息 (实测停车后位姿
+        "倒退" 6cm = 读到了运动中途的旧帧)。机器人采样时必然静止, 连读
+        两次间隔 0.3s、位姿一致才采信 —— 一致即新鲜。"""
+        last = await self._odom_raw(topic)
+        for _ in range(8):
+            await asyncio.sleep(0.3)
+            cur = await self._odom_raw(topic)
+            if (np.linalg.norm(cur[:3, 3] - last[:3, 3]) < 0.002
+                    and np.abs(cur[:3, :3] - last[:3, :3]).max() < 0.005):
+                return cur
+            last = cur
+        print("  odom did not settle — using last reading")
+        return last
+
+    async def set_guard(self, enabled: bool) -> None:
+        try:
+            await self.client.call_service(
+                "/mentorpi_base/set_parameters", "rcl_interfaces/srv/SetParameters",
+                {"parameters": [{"name": "obstacle_guard",
+                                 "value": {"type": 1, "bool_value": enabled}}]},
+                timeout=5.0)
+            print(f"obstacle guard -> {enabled}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"!! failed to set obstacle_guard={enabled}: {exc}")
 
     async def rotate(self, deg: float) -> bool:
         r = await self.router.handle_tool_call("robot.rotate", {"angle_deg": deg})
@@ -142,14 +168,35 @@ async def aim_tag(robot, det, fx, cx, tries=3):
         ang = math.degrees(math.atan2(cx - u, fx))
         if abs(ang) < 4.0:
             return r
-        await robot.rotate(ang)
+        if not await robot.rotate(ang):
+            print("  aim rotate failed (guard/hardware) — keeping current heading")
+            return r
     await asyncio.sleep(1.0)
     return det.detect(await robot.frame())
+
+
+async def health_check(robot) -> bool:
+    """Prove the drivetrain physically moves: 15° there and back, verified
+    against EKF yaw (gyro). Catches dead STM32 / power switch off — those
+    fail silently otherwise (cmd-integrated odom moves, robot doesn't)."""
+    def yaw_of(T):
+        return math.atan2(T[1, 0], T[0, 0])
+    y0 = yaw_of(await robot.odom())
+    ok = await robot.rotate(15)
+    y1 = yaw_of(await robot.odom())
+    moved = math.degrees(abs(math.atan2(math.sin(y1 - y0), math.cos(y1 - y0))))
+    if ok and moved >= 7.0:
+        await robot.rotate(-15)
+        return True
+    print(f"!! drivetrain health check FAILED (rotate ok={ok}, gyro moved "
+          f"{moved:.1f}°) — check STM32 power switch / battery / USB serial")
+    return False
 
 
 async def capture(robot, det, out: Path, records: list, note: str):
     await asyncio.sleep(1.2)  # settle + let the 2Hz viewer frame refresh
     T_odom_base = await robot.odom()
+    T_raw_base = await robot.odom("/odom")
     jpeg = await robot.frame()
     r = det.detect(jpeg)
     if r is None:
@@ -160,15 +207,23 @@ async def capture(robot, det, out: Path, records: list, note: str):
     (out / f"frame_{idx:02d}.jpg").write_bytes(jpeg)
     records.append({"note": note,
                     "T_odom_base": T_odom_base.tolist(),
+                    "T_raw_base": T_raw_base.tolist(),
                     "T_cam_tag": T_cam_tag.tolist()})
     print(f"  [{note}] captured #{idx} (tag u={u:.0f}px)")
 
 
-async def collect(url: str, aire_path: str, tag_size: float, out: Path):
+async def collect(url: str, aire_path: str, tag_size: float, out: Path,
+                  intrinsics=None):
     robot = Robot(url, aire_path)
-    fx, fy, cx, cy = await robot.camera_info()
+    if intrinsics is not None:
+        fx, fy, cx, cy = intrinsics
+    else:
+        fx, fy, cx, cy = await robot.camera_info()
     print(f"camera: fx={fx:.1f} fy={fy:.1f} cx={cx:.1f} cy={cy:.1f}")
     det = TagDetector(fx, fy, cx, cy, tag_size)
+
+    if not await health_check(robot):
+        return False
 
     # -- scan for the tag --
     found = det.detect(await robot.frame())
@@ -190,32 +245,70 @@ async def collect(url: str, aire_path: str, tag_size: float, out: Path):
     records: list = []
     out.mkdir(parents=True, exist_ok=True)
 
-    # -- stations: (label, how to get there from previous) --
-    # Lateral sweep at the current depth, then a step back, sweep again.
-    # At each station: aim, capture at -10°/0°/+10° headings.
-    async def station(label):
-        if await aim_tag(robot, det, fx, cx) is None:
+    # -- stations: lateral sweep at two depths --
+    # At each station: (re)aim, capture at -10°/0°/+10° headings.
+    async def reacquire(hint_deg):
+        """Sweep toward the expected tag bearing until detected."""
+        for ang in (hint_deg, -2 * hint_deg, 3 * hint_deg):
+            if ang == 0 or not await robot.rotate(ang):
+                return None
+            await asyncio.sleep(1.0)
+            if det.detect(await robot.frame()) is not None:
+                return True
+        return None
+
+    async def station(label, hint_deg=0):
+        r = await aim_tag(robot, det, fx, cx)
+        if r is None and hint_deg and await reacquire(hint_deg):
+            r = await aim_tag(robot, det, fx, cx)
+        if r is None:
             print(f"  [{label}] tag lost — station skipped")
             return
         await capture(robot, det, out, records, f"{label} aim")
-        for d in (-10, 20):  # -10° then back through center to +10°
-            await robot.rotate(d)
-            await capture(robot, det, out, records, f"{label} {'-10' if d == -10 else '+10'}°")
-        await robot.rotate(-10)  # back to aim
+        # 宽弧多朝向: ±22°/±11°。小弧 (±10°) 下 (相机y, 相机yaw) 在解空间
+        # 里近简并 (两数据集分别解出 +6°/-6° yaw 而残差不变), 大弧才能把
+        # 杠杆臂的弯曲信息压进数据。
+        moved = 0.0
+        for target in (-22, -11, 11, 22):
+            d = target - moved
+            if await robot.rotate(d):
+                moved = target
+                await capture(robot, det, out, records, f"{label} {target:+d}°")
+            else:
+                print(f"  [{label}] rotate {d}° failed — heading skipped")
+        await robot.rotate(-moved)  # back to aim
 
-    await station("S0 center")
-    if await robot.move("left", 0.3):
-        await station("S1 left")
-    if await robot.move("right", 0.6):
-        await station("S2 right")
-    if await robot.move("left", 0.3):
-        pass  # back to center line
-    if await robot.move("backward", 0.35):
-        await station("S3 back-center")
-        if await robot.move("left", 0.35):
-            await station("S4 back-left")
-        if await robot.move("right", 0.7):
-            await station("S5 back-right")
+    # v3 站位: 弧站 + 直线站 (见 solve_v3 docstring)。
+    # 直线段用 tag 实测距离规划: 站位全部保持在 tag 1.0m 以外 —— 守卫
+    # 全程开启也不会进减速区 (慢行区 <0.75m), 更不可能撞上平板
+    # (2026-07-12 曾因关守卫 + 固定步数前进撞倒平板, 勿回退)。
+    async def tag_dist():
+        await asyncio.sleep(1.0)
+        r = det.detect(await robot.frame())
+        return None if r is None else float(np.linalg.norm(np.array(r[0])[:3, 3]))
+
+    await station("S0 arc")
+    # 后退拉大基线到 ~1.6m (或被守卫/失检拦住)
+    d = await tag_dist()
+    while d is not None and d < 1.6:
+        if not await robot.move("backward", 0.25):
+            print(f"  rear blocked at tag dist {d:.2f}m")
+            break
+        d = await tag_dist()
+    await capture(robot, det, out, records, "L0 line")
+    k = 1
+    while k <= 6:
+        d = await tag_dist()
+        if d is None:
+            print("  line: tag lost, stopping")
+            break
+        if d < 1.0:  # 站位下限: 下一步后仍 >0.75m
+            print(f"  line: reached closest station (tag {d:.2f}m)")
+            break
+        if not await robot.move("forward", 0.25):
+            break
+        await capture(robot, det, out, records, f"L{k} line")
+        k += 1
 
     (out / "records.json").write_text(json.dumps(records, indent=1))
     print(f"collected {len(records)} poses -> {out}/records.json")
@@ -225,25 +318,151 @@ async def collect(url: str, aire_path: str, tag_size: float, out: Path):
 
 # ---------- solve ----------
 
-def solve(out: Path, cam_z: float):
+def solve_v3(out: Path, cam_z: float):
+    """Arc + line model.
+
+    Arc records ("S0 arc ..."): in-place rotations at a fixed point p0
+    (EKF yaw per pose is gyro-accurate) — pins the camera lever arm and
+    the base rotation axis in camera frame (pitch/roll).
+    Line records ("Lk line"): pure straight driving, no rotations. The
+    RAW cmd-integrated odometry arc length is wheel-calibrated and
+    trustworthy on a straight constant-speed run (unlike the EKF pose,
+    which lags at low speed, and unlike strafe, which slips) — this
+    metric baseline pins the camera yaw, which arc data alone cannot
+    (camera-yaw/tag-yaw gauge freedom). Line direction is a free unknown.
+    """
     from scipy.optimize import least_squares
     from scipy.spatial.transform import Rotation
 
     records = json.loads((out / "records.json").read_text())
+    arc = [r for r in records if r["note"].startswith("S")]
+    line = [r for r in records if r["note"].startswith("L")]
+    if not arc or len(line) < 2:
+        print(f"v3 needs arc + >=3 line records (have {len(arc)}/{len(line)})")
+        return None
+    print(f"solving v3 with {len(arc)} arc + {len(line)} line poses "
+          f"(camera z fixed at {cam_z} m)")
+
+    def yaw_of(T):
+        return math.atan2(T[1][0], T[0][0])
+
+    T_ct = [np.array(r["T_cam_tag"]) for r in records]
+    yaws = [yaw_of(r["T_odom_base"]) for r in records]
+    p0 = np.array(arc[0]["T_odom_base"])[:2, 3]           # arc anchor (gauge)
+    raw0 = np.array(line[0]["T_raw_base"])[:2, 3]
+    s = [float(np.linalg.norm(np.array(r["T_raw_base"])[:2, 3] - raw0))
+         for r in line]
+    # initial line direction from EKF endpoints (direction survives lag)
+    e0 = np.array(line[0]["T_odom_base"])[:2, 3]
+    e1 = np.array(line[-1]["T_odom_base"])[:2, 3]
+    theta0 = math.atan2(*(e1 - e0)[::-1]) if np.linalg.norm(e1 - e0) > 1e-3 else 0.0
+
+    # tag 只当"3D 点"用: 平面 tag 近正对时 PnP 的旋转解有几度级抖动/
+    # 双解偏置 (历次 yaw 在 ±7° 乱跳的元凶), 平移则稳到 ~0.5% 距离。
+    # 位置-only 残差把旋转噪声整体挡在门外。
+    R0 = M_LINK_FROM_OPT
+    x0 = np.zeros(11)
+    x0[0:2] = [0.143, 0.0]
+    x0[2:5] = Rotation.from_matrix(R0).as_rotvec()
+    T_bc0 = rt_to_mat(R0, [0.143, 0.0, cam_z])
+    T_ot0 = np.array(arc[0]["T_odom_base"]) @ T_bc0 @ np.array(arc[0]["T_cam_tag"])
+    x0[5:8] = T_ot0[:3, 3]          # tag 位置 (点)
+    x0[8:10] = e0                   # 直线起点
+    x0[10] = theta0                 # 直线方向
+
+    n_arc = len(arc)
+    tag_pos_cam = [T[:3, 3] for T in T_ct]
+
+    def residuals(x):
+        T_bc = rt_to_mat(Rotation.from_rotvec(x[2:5]).as_matrix(),
+                         [x[0], x[1], cam_z])
+        p_tag = x[5:8]
+        q0, th = x[8:10], x[10]
+        res = []
+        for i in range(len(records)):
+            if i < n_arc:
+                pos = p0
+            else:
+                k = i - n_arc
+                pos = q0 + s[k] * np.array([math.cos(th), math.sin(th)])
+            T_base = rt_to_mat(Rotation.from_euler('z', yaws[i]).as_matrix(),
+                               [pos[0], pos[1], 0.0])
+            pred = (T_base @ T_bc)[:3, :3] @ tag_pos_cam[i] + (T_base @ T_bc)[:3, 3]
+            res.extend(pred - p_tag)
+        return np.array(res)
+
+    sol = least_squares(residuals, x0, method="lm", max_nfev=5000)
+    T_bc = rt_to_mat(Rotation.from_rotvec(sol.x[2:5]).as_matrix(),
+                     [sol.x[0], sol.x[1], cam_z])
+    res = residuals(sol.x).reshape(len(records), 3)
+    t_rms = float(np.sqrt((res ** 2).sum(1).mean())) * 1000
+    print(f"residual RMS: {t_rms:.1f} mm (position-only)")
+    _print_extrinsic(T_bc)
+    return t_rms
+
+
+def _print_extrinsic(T_bc):
+    T_opt_link = np.eye(4)
+    T_opt_link[:3, :3] = np.linalg.inv(M_LINK_FROM_OPT)
+    T_bl = T_bc @ T_opt_link
+    x, y, z = T_bl[:3, 3]
+    roll, pitch, yaw = mat_to_rpy(T_bl)
+    print("\n=== base_link -> camera_link ===")
+    print(f"translation: x={x:.4f} y={y:.4f} z={z:.4f}  (old: 0.143 0 0.095)")
+    print(f"rpy (rad):   roll={roll:.4f} pitch={pitch:.4f} yaw={yaw:.4f}")
+    print(f"rpy (deg):   roll={math.degrees(roll):.2f} "
+          f"pitch={math.degrees(pitch):.2f} yaw={math.degrees(yaw):.2f}")
+    print("\nbase.launch.py static_transform_publisher arguments (x y z yaw pitch roll):")
+    print(f"  ['{x:.4f}', '{y:.4f}', '{z:.4f}', "
+          f"'{yaw:.4f}', '{pitch:.4f}', '{roll:.4f}', 'base_link', 'camera_link']")
+
+
+def solve(out: Path, cam_z: float, trust_odom: bool = False):
+    """Rotation-only hand-eye: trust per-station in-place rotations (EKF yaw
+    = bias-corrected gyro, reliable) and treat every station's 2D position
+    as a free unknown. Command-integrated odometry TRANSLATION is open-loop
+    on a slipping mecanum base and measured 4x off vs the tag — it must not
+    constrain the solve. In-place rotations alone observe the camera lever
+    arm (x, y), yaw, and the base rotation axis seen in the camera (pitch,
+    roll); camera z stays ruler-fixed."""
+    records = json.loads((out / "records.json").read_text())
+    if any(r["note"].startswith("L") for r in records):
+        return solve_v3(out, cam_z)
+
+    from scipy.optimize import least_squares
+    from scipy.spatial.transform import Rotation
+
     T_ob = [np.array(r["T_odom_base"]) for r in records]
     T_ct = [np.array(r["T_cam_tag"]) for r in records]
-    n = len(records)
-    print(f"solving with {n} poses (camera z fixed at {cam_z} m)")
+    station_names = sorted({r["note"].split()[0] for r in records})
+    st_idx = [station_names.index(r["note"].split()[0]) for r in records]
+    yaws = [math.atan2(T[1, 0], T[0, 0]) for T in T_ob]
+    n, ns = len(records), len(station_names)
+    print(f"solving with {n} poses at {ns} stations "
+          f"(camera z fixed at {cam_z} m; odom translation "
+          f"{'TRUSTED (forward-line pattern)' if trust_odom else 'NOT trusted'})")
 
-    # params: base->cam_optical [x y rvec(3)] + odom->tag [x y z rvec(3)]
+    # params: base->cam_optical [x y rvec(3)] + odom->tag [xyz rvec(3)]
+    #         + per-station 2D position (station 0 pinned at its odom value)
     R0 = M_LINK_FROM_OPT  # camera level, no mount rotation
-    x0 = np.zeros(11)
+    x0 = np.zeros(11 + 2 * (ns - 1))
     x0[0:2] = [0.143, 0.0]
     x0[2:5] = Rotation.from_matrix(R0).as_rotvec()
     T_bc0 = rt_to_mat(R0, [0.143, 0.0, cam_z])
     T_ot0 = T_ob[0] @ T_bc0 @ T_ct[0]
     x0[5:8] = T_ot0[:3, 3]
     x0[8:11] = Rotation.from_matrix(T_ot0[:3, :3]).as_rotvec()
+    st_odom = []
+    for s in range(ns):
+        i = st_idx.index(s)
+        st_odom.append(T_ob[i][:2, 3])
+        if s > 0:
+            x0[11 + 2 * (s - 1): 13 + 2 * (s - 1)] = st_odom[s]
+
+    def station_pos(x, s):
+        if trust_odom or s == 0:
+            return st_odom[s]
+        return x[11 + 2 * (s - 1): 13 + 2 * (s - 1)]
 
     def unpack(x):
         T_bc = rt_to_mat(Rotation.from_rotvec(x[2:5]).as_matrix(),
@@ -255,12 +474,15 @@ def solve(out: Path, cam_z: float):
         T_bc, T_ot = unpack(x)
         res = []
         for i in range(n):
-            D = np.linalg.inv(T_ot) @ T_ob[i] @ T_bc @ T_ct[i]
+            p = station_pos(x, st_idx[i])
+            T_base = rt_to_mat(Rotation.from_euler('z', yaws[i]).as_matrix(),
+                               [p[0], p[1], 0.0])
+            D = np.linalg.inv(T_ot) @ T_base @ T_bc @ T_ct[i]
             res.extend(D[:3, 3])
             res.extend(Rotation.from_matrix(D[:3, :3]).as_rotvec() * 0.1)
         return np.array(res)
 
-    sol = least_squares(residuals, x0, method="lm", max_nfev=2000)
+    sol = least_squares(residuals, x0, method="lm", max_nfev=5000)
     T_bc, _ = unpack(sol.x)
     res = residuals(sol.x).reshape(n, 6)
     t_rms = float(np.sqrt((res[:, :3] ** 2).sum(1).mean())) * 1000
@@ -293,18 +515,24 @@ def main():
                     help="ruler-measured camera height above base_link (m)")
     ap.add_argument("--out", default="/tmp/calib_run")
     ap.add_argument("--solve-only", metavar="DIR")
+    ap.add_argument("--trust-odom", action="store_true",
+                    help="trust odom station positions (forward-line pattern)")
     ap.add_argument("--aire-path", default=AIRE_PATH_DEFAULT)
+    ap.add_argument("--intrinsics", nargs=4, type=float,
+                    metavar=("FX", "FY", "CX", "CY"),
+                    help="bypass rosbridge camera_info (its QoS is flaky)")
     args = ap.parse_args()
 
     if args.solve_only:
-        solve(Path(args.solve_only), args.cam_z)
+        solve(Path(args.solve_only), args.cam_z, args.trust_odom)
         return
     if not args.url:
         ap.error("url required unless --solve-only")
     out = Path(args.out)
-    ok = asyncio.run(collect(args.url, args.aire_path, args.tag_size, out))
+    ok = asyncio.run(collect(args.url, args.aire_path, args.tag_size, out,
+                             intrinsics=args.intrinsics))
     if ok:
-        solve(out, args.cam_z)
+        solve(out, args.cam_z, trust_odom=True)
     else:
         print("collection incomplete; fix setup and rerun "
               f"(or --solve-only {out} if enough poses)")
