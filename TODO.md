@@ -17,7 +17,7 @@
       量角器量实际 `θ`，`(W+T)_new = (W+T)_old × ω / θ`。
 - [ ] **Step 1.3 UMBmark**：4×4m 正方形顺/逆各 5 圈，判断 track_width 偏差
       与左右轮不对称（判据表见 calibration.md）。
-- [ ] （视结果）横移 vy 若有系统性尺度误差，给 base_node 加 vy 尺度参数
+- [x] （已实现 vy_scale 参数,标定后保持 1.0）
       （麦轮横移打滑是系统性的，纯协方差盖不住尺度错）。
 - [ ] **验收**：3×3m 闭合路径，直线漂移 < 5%。
 
@@ -29,7 +29,7 @@
 - [ ] **Step 2.2 精化 `base_link → imu_link` TF**：TF 已在
       `base.launch.py`（z=0.05、零旋转为估计值），按 2.1 结果改 RPY，
       平移尺子量。
-- [ ] **Step 2.3 Gyro 零偏**：绝对静止 60s 记录 `angular_velocity` 均值
+- [x] **Step 2.3 Gyro 零偏**(2026-07-12 在线估计上线)：绝对静止 60s 记录 `angular_velocity` 均值
       （典型 0.001~0.01 rad/s）。长期方案见下面代码项（启动自估计）。
 - [ ] **Step 2.4 Gyro_z 比例**：原地转实测 360°（物理量角），积分 gyro.z
       应 = 2π，不等则在 base_node 乘比例系数。
@@ -37,11 +37,11 @@
 
 ### Part 3 — 相机外参 `base_link → camera_link`（依赖 Part 1+2）
 
-- [ ] **粗标（先做，高斯泼溅重建图之前）**：尺子量相机光心相对 base_link
+- [x] **粗标**(2026-07-05 完成)：尺子量相机光心相对 base_link
       的 x/z 改 `base.launch.py`；pitch 用点云判据调——rtabmap 建图后在
       RViz/Rerun 里看地面是否水平（地面点 z 应 ≈0 且不倾斜），低头角按
       弧度填 pitch（10°≈0.1745）。
-- [ ] **精标（AprilTag 法）**：打印 36h11 tag（边长 ≥10cm）平贴地面，
+- [x] **精标（AprilTag 法,2026-07-12 完成,见 §4.6 与 scripts/calibrate_camera_extrinsic.py）**：打印 36h11 tag（边长 ≥10cm）平贴地面，
       `apriltag_ros` 输出 `T_camOptical_tag`，尺子量 `T_base_tag`，
       反推 `T_base_camLink = T_base_tag × T_camOptical_tag⁻¹ ×
       T_optical_camLink`。多帧取平均。依赖：`sudo apt install
@@ -57,16 +57,16 @@
 
 ## 2. 代码待做
 
-- [ ] **base_node 启动 gyro 零偏自估计**：上电静止 ~5s 取 gx/gy/gz 均值，
+- [x] **base_node 启动 gyro 零偏自估计**(2026-07-12 完成,更优:停车 EMA 在线估计,见 gyro_bias_estimation)：上电静止 ~5s 取 gx/gy/gz 均值，
       之后发布前扣除。动机：EKF 现在直接融合 gyro vyaw，零偏会 1:1 积分成
       yaw 漂移（0.005 rad/s ≈ 17°/min）。需处理"启动时车在动"的场景
       （方差超阈值则跳过估计并告警）。
-- [ ] **supervisor 停 3D 模式的宽限期**：`_stop_active` 目前 SIGINT 10s →
+- [x] **supervisor 停 3D 模式的宽限期**(已完成:SIGINT 90s)：`_stop_active` 目前 SIGINT 10s →
       SIGTERM 5s → SIGKILL。rtabmap 收尾要把内存图写回 db，大 db + SD 卡
       慢时 10s 不够，SIGKILL 配合 `Synchronous=OFF + journal=MEMORY` 是
       db 损坏（`addWordRef() Not found word`）的头号嫌疑。改为：slam_3d/
       loc_3d 模式 SIGINT 宽限 ≥30s，且 rtabmap 永不 SIGKILL（超时只告警）。
-- [ ] `accel_limit_linear/angular`（base_node 新参数，默认 1.5 / 10.0）
+- [x] `accel_limit_linear/angular`（已实现,默认 1.5 / 10.0）
       实车调参：手柄阶跃指令下对比 `/odom` 与实际位移，斜坡太缓/太陡都改。
 - [ ] 地图保存进 supervisor/web UI（目前 2D 靠手动调 serialize_map 服务，
       手机端没有入口）。
@@ -102,7 +102,7 @@
       相机需直插 Pi 蓝口（挂 hub 会双流带宽塌陷 → 3fps）。
 - [ ] 手机端 `--serve` 实测。
 - [ ] 跟进 Rerun 原生 3DGS 渲染支持，落地后替换点云 fallback。
-- [ ] 增量建图实测：同 db 再进 slam_3d + `load_all_nodes:=true`（CLI 直接
+- [x] 增量建图实测(2026-07-12 完成,WM 185→379,SetMode 已透传字段)：同 db 再进 slam_3d + `load_all_nodes:=true`（CLI 直接
       launch,supervisor 的 SetMode 还没有该字段——要用再加）,确认新旧
       会话合并、GS 重训后场景更新。
 - [ ] 低光提示：夜间/暗处彩色相机掉到 1-4Hz、特征枯竭 → 重定位静默失败
@@ -133,7 +133,7 @@
       (平面运动不可观)。踩坑记录见脚本 docstring 与 commit。
       **注意:现有 rtabmap.db 是旧外参建的,下次白天增量重扫后相机-激光
       一致性才完全兑现。**
-- [ ] **白天增量续图增厚地图**:`slam_3d` + 同 db + `load_all_nodes:=true`
+- [x] **白天增量续图增厚地图**(2026-07-12 完成,激光邻近链 219→431):`slam_3d` + 同 db + `load_all_nodes:=true`
       再扫 5-10 分钟(多角度、多回环),锚点密度翻倍。注意 supervisor
       /mode/set 尚不透传 load_all_nodes(需 CLI 或加字段)。
 - [ ] **rtabmap 修正加密/加宽容**:`Rtabmap/DetectionRate` 2→4Hz(看 Pi
