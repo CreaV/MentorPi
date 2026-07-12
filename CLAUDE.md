@@ -153,7 +153,8 @@ Architecture: **base 常驻 + 模式按需挂载**。`base.launch.py` 在 `remot
 
 | File | Package | Description |
 |------|---------|-------------|
-| `base.launch.py` | mentorpi_bringup | 常驻硬件: base_node + STM32 IMU Madgwick + EKF + Gemini 2L (RGB-D 15fps) + joy + teleop + lidar + base→camera/laser TF |
+| `base.launch.py` | mentorpi_bringup | 常驻硬件: base_node + STM32 IMU Madgwick + EKF + camera_watchdog (托管 Gemini 2L) + joy + teleop + lidar + base→camera/laser TF |
+| `camera.launch.py` | mentorpi_bringup | Gemini 2L (RGB-D 15fps, IMU off)。**不直接进别的 launch** —— 由 `camera_watchdog` 节点 spawn 并监测 `/camera/depth/camera_info`,帧停发 >20s 或进程死亡时自动 `usbreset` + 重启 driver(修 openUsbDevice 卡死) |
 | `slam_2d.launch.py` | mentorpi_bringup | 仅 slam_toolbox 异步建图 |
 | `slam_3d.launch.py` | mentorpi_bringup | 仅 rtabmap + point_cloud_xyzrgb (相机已在 base 里跑)；融合 lidar `/scan` 做 NeighborLinkRefining + proximity detection 抗轮速打滑 |
 | `loc_2d.launch.py` | mentorpi_bringup | 仅 slam_toolbox 定位 (吃 `map_file:=...`) |
@@ -342,7 +343,7 @@ rtabmap 节点参数:
 **Gemini 2L USB requirements:**
 - Must use USB 3.0 port (blue, 5000M) and USB-C 3.0 cable. USB 2.0 (480M) produces `color frame is not decoded` errors and disconnects within 1 second.
 - Pi 5 needs `PSU_MAX_CURRENT=5000` in EEPROM (`sudo rpi-eeprom-config --edit`) and `usb_max_current_enable=1` in `/boot/firmware/config.txt` to prevent voltage-drop-induced USB resets when the IR projector kicks in.
-- If camera fails to initialize (`uvc_open -6`), try `usbreset 2bc5:0670`. Stale `component_container` processes from a previous launch can also hold the device — check with `ps -ef | grep component_container`.
+- If camera fails to initialize (`uvc_open -6` / `openUsbDevice failed`), `camera_watchdog` now auto-recovers (usbreset + driver restart, ~1min cycle)。手动兜底: `usbreset 2bc5:0670` 后重启 driver。Stale `component_container` processes from a previous launch can also hold the device — check with `ps -ef | grep component_container`.
 
 ### RViz2 Visualization
 

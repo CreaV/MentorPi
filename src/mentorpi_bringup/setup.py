@@ -28,6 +28,7 @@ setup(
     },
     entry_points={
         'console_scripts': [
+            'camera_watchdog = mentorpi_bringup.camera_watchdog:main',
         ],
     },
 )

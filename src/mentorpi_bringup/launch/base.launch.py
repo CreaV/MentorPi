@@ -12,15 +12,12 @@ rtabmap on top of the already-running camera streams.
 """
 import os
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription
-from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 
 
 def generate_launch_description():
     bringup_dir = get_package_share_directory('mentorpi_bringup')
-    orbbec_dir = get_package_share_directory('orbbec_camera')
 
     return LaunchDescription([
         # Serial driver -- /odom 50Hz + /imu/data_raw. odom TF provided by EKF.
@@ -60,24 +57,14 @@ def generate_launch_description():
 
         # Gemini 2L (RGB-D, IMU disabled). Always on so preview / 3D SLAM share
         # the same camera instance -- starting slam_3d does NOT relaunch camera.
-        IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(
-                os.path.join(orbbec_dir, 'launch', 'gemini2L.launch.py')
-            ),
-            launch_arguments={
-                'color_width': '640',
-                'color_height': '480',
-                'color_fps': '15',
-                'color_format': 'MJPG',
-                'depth_width': '640',
-                'depth_height': '400',
-                'depth_fps': '15',
-                'depth_registration': 'true',
-                'enable_accel': 'false',
-                'enable_gyro': 'false',
-                'enable_sync_output_accel_gyro': 'false',
-                'enable_colored_point_cloud': 'false',
-            }.items(),
+        # 由 camera_watchdog 托管 (spawns camera.launch.py): orbbec driver 的
+        # USB wedge ("openUsbDevice failed" 后死循环, 服务重启时高发) 需要
+        # usbreset + driver 重启才能恢复, watchdog 检测到帧停发时自动做。
+        Node(
+            package='mentorpi_bringup',
+            executable='camera_watchdog',
+            name='camera_watchdog',
+            output='screen',
         ),
 
         # Bounded motion primitives (voice / VLA / agent execution substrate).

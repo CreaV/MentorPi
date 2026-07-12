@@ -144,9 +144,11 @@
       判别：掉线时用手机 ping 192.168.8.117。**台架调试建议直接插网线**。
       DDS 抗断网方案：FastDDS interface whitelist XML（LOCALHOST 环境
       变量已证伪，会弄坏图像话题/action/supervisor）。
-- [ ] **相机 USB 卡死恢复路径**：usbreset 有时无效需冷启；考虑在
-      supervisor 或 systemd watchdog 里加自动恢复(检测 openUsbDevice
-      failed → usbreset → 容器重启)。
+- [x] **相机 USB 卡死恢复路径**(2026-07-12 完成)：新增 `camera_watchdog`
+      节点(mentorpi_bringup)托管 camera.launch.py,监测
+      /camera/depth/camera_info,帧停发 >20s 或进程死亡 → SIGINT 驱动 →
+      usbreset 2bc5:0670 → 重启,无限重试(~1min/轮)。单独 usbreset 无效
+      的场景(需冷启)仍是残余风险,遇到再说。
 - [ ] STM32 电源开关状态检查提示：/battery ≈4.4V + IMU 活 + 电机不转 =
       开关没开（见 docs/power_troubleshooting.md）。
 
