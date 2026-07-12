@@ -48,6 +48,7 @@ class CameraWatchdog(Node):
         self._started_at = 0.0
         self._last_msg: float | None = None
         self._restarts = 0
+        self._consecutive_failures = 0
 
         qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT)
         self.create_subscription(
@@ -58,6 +59,8 @@ class CameraWatchdog(Node):
         self.create_timer(3.0, self._check)
 
     def _msg_cb(self, _msg):
+        if self._last_msg is None and self._consecutive_failures:
+            self._consecutive_failures = 0
         self._last_msg = time.monotonic()
 
     # ------- subprocess lifecycle -------
@@ -100,9 +103,24 @@ class CameraWatchdog(Node):
 
     def _recover(self, reason: str):
         self._restarts += 1
+        self._consecutive_failures += 1
         self.get_logger().warn(f'camera recovery #{self._restarts}: {reason}')
         self._stop()
         self._usbreset()
+        if self._consecutive_failures >= 2:
+            # usbreset 不够时升级: USB authorized 软拔插 (需 root, 通过
+            # sudoers 免密白名单的专用脚本, 见 scripts/gemini-usb-replug.sh)。
+            # 实测 2026-07-12: openUsbDevice 死循环 usbreset 救不回,
+            # authorized 0->1 一次即愈。
+            self.get_logger().warn('escalating: usb authorized soft-replug')
+            try:
+                res = subprocess.run(
+                    ['sudo', '-n', '/usr/local/sbin/gemini-usb-replug'],
+                    capture_output=True, text=True, timeout=20)
+                self.get_logger().info(
+                    f'replug: rc={res.returncode} {(res.stdout + res.stderr).strip()}')
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                self.get_logger().error(f'replug failed: {exc}')
         time.sleep(2.0)
         self._start()
 
