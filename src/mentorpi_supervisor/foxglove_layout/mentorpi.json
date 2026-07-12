@@ -19,8 +19,16 @@
         "distance": 8,
         "phi": 60,
         "thetaOffset": 45,
-        "targetOffset": [0, 0, 0],
-        "target": [0, 0, 0],
+        "targetOffset": [
+          0,
+          0,
+          0
+        ],
+        "target": [
+          0,
+          0,
+          0
+        ],
         "fovy": 45,
         "near": 0.5,
         "far": 5000
@@ -28,44 +36,92 @@
       "followMode": "follow-pose",
       "followTf": "base_link",
       "scene": {
-        "transforms": {"axisScale": 0.5}
+        "transforms": {
+          "axisScale": 0.5
+        }
       },
       "transforms": {},
       "topics": {
-        "/scan": {"visible": true, "colorMode": "flat", "flatColor": "#ff8800"},
-        "/map": {"visible": true},
-        "/rtabmap/cloud": {"visible": true, "pointSize": 2},
-        "/odometry/filtered": {"visible": true}
+        "/scan": {
+          "visible": true,
+          "colorMode": "flat",
+          "flatColor": "#ff8800"
+        },
+        "/map": {
+          "visible": true
+        },
+        "/rtabmap/cloud": {
+          "visible": true,
+          "pointSize": 2
+        },
+        "/odometry/filtered": {
+          "visible": true
+        }
       },
       "layers": {}
     },
     "Teleop!joystick": {
       "topic": "/cmd_vel",
       "publishRate": 10,
-      "upButton": {"field": "linear-x", "value": 0.3},
-      "downButton": {"field": "linear-x", "value": -0.3},
-      "leftButton": {"field": "angular-z", "value": 1.0},
-      "rightButton": {"field": "angular-z", "value": -1.0}
+      "upButton": {
+        "field": "linear-x",
+        "value": 0.3
+      },
+      "downButton": {
+        "field": "linear-x",
+        "value": -0.3
+      },
+      "leftButton": {
+        "field": "angular-z",
+        "value": 1.0
+      },
+      "rightButton": {
+        "field": "angular-z",
+        "value": -1.0
+      }
     },
     "Indicator!mode": {
       "path": "/mode/status.data",
       "style": "background",
       "rules": [
-        {"operator": "=", "rawValue": "idle", "color": "#888888", "label": "IDLE"},
-        {"operator": "=", "rawValue": "slam_2d", "color": "#3388ff", "label": "2D SLAM"},
-        {"operator": "=", "rawValue": "slam_3d", "color": "#33aa44", "label": "3D SLAM"},
-        {"operator": "=", "rawValue": "loc_2d", "color": "#aa44aa", "label": "2D LOCALIZATION"}
+        {
+          "operator": "=",
+          "rawValue": "idle",
+          "color": "#888888",
+          "label": "IDLE"
+        },
+        {
+          "operator": "=",
+          "rawValue": "slam_2d",
+          "color": "#3388ff",
+          "label": "2D SLAM"
+        },
+        {
+          "operator": "=",
+          "rawValue": "slam_3d",
+          "color": "#33aa44",
+          "label": "3D SLAM"
+        },
+        {
+          "operator": "=",
+          "rawValue": "loc_2d",
+          "color": "#aa44aa",
+          "label": "2D LOCALIZATION"
+        }
       ],
       "fallbackColor": "#222222",
       "fallbackLabel": "(no /mode/status yet)"
     },
     "Gauge!battery": {
       "path": "/battery.voltage",
-      "minValue": 6,
-      "maxValue": 13,
+      "minValue": 6.4,
+      "maxValue": 8.4,
       "colorMap": "red-yellow-green",
       "colorMode": "colormap",
-      "gradient": ["#ff3333", "#33aa44"],
+      "gradient": [
+        "#ff3333",
+        "#33aa44"
+      ],
       "reverse": false
     },
     "CallService!setIdle": {
@@ -115,7 +171,9 @@
   },
   "globalVariables": {},
   "userNodes": {},
-  "playbackConfig": {"speed": 1},
+  "playbackConfig": {
+    "speed": 1
+  },
   "layout": {
     "first": {
       "first": "Image!camera",

@@ -205,7 +205,7 @@ Architecture: **base 常驻 + 模式按需挂载**。`base.launch.py` 在 `remot
 |-------|------|------|-------------|
 | `/odom` | Odometry | 50Hz | Dead-reckoning from cmd_vel integration |
 | `/imu/data_raw` | Imu | ~50Hz | Raw accel (m/s²) + gyro (rad/s), no orientation |
-| `/battery` | BatteryState | ~1Hz | STM32 电源输入电压(V),Foxglove Gauge 默认量程 6-13V(覆盖 2S/3S lipo);`present=false` 表示采样异常或未接电池 |
+| `/battery` | BatteryState | ~1Hz | STM32 电源输入电压(V),Foxglove Gauge 量程 6.4–8.4V(2S lipo 真实区间:8.4=满电,6.6 该停机充电,≈4.4V=电源开关没开的寄生电压,指针触底+`present` 仍 true);`present=false` 表示采样异常或未接电池 |
 
 ## IMU Data Flow
 

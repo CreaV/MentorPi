@@ -60,8 +60,8 @@
     },
     "Gauge!battery": {
       "path": "/battery.voltage",
-      "minValue": 6,
-      "maxValue": 13,
+      "minValue": 6.4,
+      "maxValue": 8.4,
       "colorMap": "red-yellow-green",
       "colorMode": "colormap",
       "gradient": ["#ff3333", "#33aa44"],
