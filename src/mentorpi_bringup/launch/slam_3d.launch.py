@@ -16,6 +16,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 # Shared between slam_3d and loc_3d (keep in sync with loc_3d.launch.py).
@@ -106,7 +107,9 @@ def generate_launch_description():
                 **RTABMAP_TUNING_PARAMS,
                 'database_path': database_path,
                 'Mem/IncrementalMemory': 'true',
-                'Mem/InitWMWithAllNodes': load_all_nodes,
+                # rtabmap 的参数全是字符串类型; LaunchConfiguration 直接传
+                # 会被 YAML 解析成 bool -> rtabmap 启动即 abort (实测 2026-07-12)。
+                'Mem/InitWMWithAllNodes': ParameterValue(load_all_nodes, value_type=str),
             }],
             remappings=RTABMAP_REMAPPINGS,
         ),
