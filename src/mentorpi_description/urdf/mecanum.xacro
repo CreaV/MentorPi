@@ -1,16 +1,15 @@
 <?xml version="1.0" ?>
 <!--
-  MentorPi mecanum body — geometry source-of-truth for sim and real robot.
-
-  IMPORTANT: 轮位置必须与 src/mentorpi_base/mentorpi_base/base_node.py:281-283
-  保持一致。当前值 (wheelbase=0.1368, track_width=0.1410) 是占位估计。
-  Part 1 标定完成后，需同时更新此处与 base_node.py。
-
-  TF root: base_footprint (REP-105 地面投影) → base_link (底盘几何中心)
-  Camera optical frames 与 Orbbec 驱动发布的 frame 名一致；真机加载 URDF 时，
-  让 Orbbec 驱动的 publish_tf=false 以避免 TF 冲突。
+  MentorPi mecanum geometry source of truth.
+  runtime_mode=false: complete offline/RViz model rooted at base_footprint.
+  runtime_mode=true: hardware TF model rooted at base_link; EKF owns
+  odom->base_link and the Orbbec driver owns camera-internal frames.
+  Wheel geometry is still an estimate and must stay synchronized with
+  mentorpi_base/base_node.py after drivetrain calibration.
 -->
 <robot name="mentorpi_mecanum" xmlns:xacro="http://ros.org/wiki/xacro">
+
+  <xacro:arg name="runtime_mode" default="false"/>
 
   <!-- ===== 几何参数（与 base_node.py 同步） ===== -->
   <xacro:property name="wheelbase"     value="0.1368"/>
@@ -28,13 +27,14 @@
   <material name="white"><color rgba="1 1 1 1"/></material>
 
   <!-- ===== Root: base_footprint (REP-105) ===== -->
-  <link name="base_footprint"/>
-
-  <joint name="base_footprint_to_base_link" type="fixed">
-    <parent link="base_footprint"/>
-    <child link="base_link"/>
-    <origin xyz="0 0 ${base_z}" rpy="0 0 0"/>
-  </joint>
+  <xacro:unless value="$(arg runtime_mode)">
+    <link name="base_footprint"/>
+    <joint name="base_footprint_to_base_link" type="fixed">
+      <parent link="base_footprint"/>
+      <child link="base_link"/>
+      <origin xyz="0 0 ${base_z}" rpy="0 0 0"/>
+    </joint>
+  </xacro:unless>
 
   <link name="base_link">
     <inertial>
@@ -86,16 +86,16 @@
   <xacro:mecanum_wheel prefix="lb" x="-${x_off}" y=" ${y_off}" mesh="wheel_lb_Link.STL"/>
   <xacro:mecanum_wheel prefix="rb" x="-${x_off}" y="-${y_off}" mesh="wheel_rb_Link.STL"/>
 
-  <!-- ===== IMU (Part 2 标定将更新 origin) ===== -->
+  <!-- ===== IMU (runtime estimate; Part 2 calibration pending) ===== -->
   <link name="imu_link"/>
   <joint name="imu_joint" type="fixed">
     <parent link="base_link"/>
     <child link="imu_link"/>
-    <!-- xyz 占位 (0,0,0)；rpy 来自 vendor mecanum.xacro。Part 2 完成后更新 -->
-    <origin xyz="0 0 0" rpy="0 0 ${-PI/2}"/>
+    <!-- Runtime estimate; refine position and axes in Part 2. -->
+    <origin xyz="0 0 0.05" rpy="0 0 0"/>
   </joint>
 
-  <!-- ===== Camera (Gemini 2L) — Part 3 标定将更新 origin ===== -->
+  <!-- ===== Camera (AprilTag hand-eye calibrated 2026-07-12) ===== -->
   <link name="camera_link">
     <inertial>
       <origin rpy="0 0 0" xyz="0.0023 0.0011 -0.0102"/>
@@ -115,24 +115,26 @@
   <joint name="camera_joint" type="fixed">
     <parent link="base_link"/>
     <child link="camera_link"/>
-    <!-- Vendor CAD 值；Part 3 AprilTag 标定后更新 -->
-    <origin xyz="0.061376 0 0.051154" rpy="0 0 0"/>
+    <!-- AprilTag hand-eye calibration, 2026-07-12; z is ruler-fixed. -->
+    <origin xyz="0.0846 0.0231 0.095" rpy="-0.0032 0.0149 -0.0422"/>
   </joint>
 
-  <!-- Optical frames: ROS REP-103 (z-forward, x-right, y-down). 与 Orbbec 驱动发的 frame 名一致 -->
-  <link name="camera_color_optical_frame"/>
-  <joint name="camera_color_optical_joint" type="fixed">
-    <parent link="camera_link"/>
-    <child link="camera_color_optical_frame"/>
-    <origin xyz="0 0 0" rpy="${-PI/2} 0 ${-PI/2}"/>
-  </joint>
+  <!-- Offline preview only; Orbbec owns these frames on hardware. -->
+  <xacro:unless value="$(arg runtime_mode)">
+    <link name="camera_color_optical_frame"/>
+    <joint name="camera_color_optical_joint" type="fixed">
+      <parent link="camera_link"/>
+      <child link="camera_color_optical_frame"/>
+      <origin xyz="0 0 0" rpy="${-PI/2} 0 ${-PI/2}"/>
+    </joint>
 
-  <link name="camera_depth_optical_frame"/>
-  <joint name="camera_depth_optical_joint" type="fixed">
-    <parent link="camera_link"/>
-    <child link="camera_depth_optical_frame"/>
-    <origin xyz="0 0 0" rpy="${-PI/2} 0 ${-PI/2}"/>
-  </joint>
+    <link name="camera_depth_optical_frame"/>
+    <joint name="camera_depth_optical_joint" type="fixed">
+      <parent link="camera_link"/>
+      <child link="camera_depth_optical_frame"/>
+      <origin xyz="0 0 0" rpy="${-PI/2} 0 ${-PI/2}"/>
+    </joint>
+  </xacro:unless>
 
   <!-- ===== Lidar (MS200) ===== -->
   <link name="laser_frame">
@@ -154,8 +156,8 @@
   <joint name="laser_joint" type="fixed">
     <parent link="base_link"/>
     <child link="laser_frame"/>
-    <!-- Vendor CAD 值（mentorpi.launch.py 的 0.18 是错的占位估计，需同步更新） -->
-    <origin xyz="-0.012242 0 0.092501" rpy="0 0 0"/>
+    <!-- Current measured runtime value; x/y and RPY still need survey. -->
+    <origin xyz="0 0 0.18" rpy="0 0 0"/>
   </joint>
 
 </robot>

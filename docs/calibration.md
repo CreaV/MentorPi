@@ -12,9 +12,9 @@ map → odom → base_link → camera_link → camera_*_optical_frame
 |-------|------|-------------|
 | `map → odom` | rtabmap / slam_toolbox | 否（算法输出） |
 | `odom → base_link` | EKF（融合 `/odom` + `/imu/data`） | **是** — 需要标定轮速里程计 + IMU |
-| `base_link → imu_link` | static_transform_publisher（`base.launch.py`，已补） | **是** — 平移/RPY 是估计值，需按 Part 2 精化 |
-| `base_link → camera_link` | static_transform_publisher | **是** — 当前是占位估计值 |
-| `base_link → laser_frame` | static_transform_publisher | 否（z=0.18 已实测） |
+| `base_link → imu_link` | xacro + robot_state_publisher | **是** — 平移/RPY 是估计值，需按 Part 2 精化 |
+| `base_link → camera_link` | xacro + robot_state_publisher | 2026-07-12 已完成 AprilTag 手眼标定；z 为尺量固定值 |
+| `base_link → laser_frame` | xacro + robot_state_publisher | z=0.18 已实测；x/y/RPY 待精量 |
 | `camera_link → camera_*_optical_frame` | Orbbec 驱动 | 否（出厂标定） |
 
 ## 标定顺序
@@ -125,7 +125,7 @@ source install/setup.bash
 
 ## Part 2 — STM32 IMU 标定
 
-> ~~隐藏 bug：缺失 `base_link → imu_link` 静态 TF~~ **已修复**：`base.launch.py` 现在发布该 TF（缺失时 robot_localization 会静默丢弃全部 IMU 测量）。当前数值是估计值（z=0.05、零旋转），本 Part 的任务是按下面步骤验证轴向并精化 RPY。
+> `base_link → imu_link` 已由 xacro + robot_state_publisher 发布。当前数值仍是估计值（z=0.05、零旋转），本 Part 用于验证轴向并精化 RPY。
 
 ### Step 2.1 — 判断 IMU 安装姿态
 
@@ -146,7 +146,7 @@ ros2 topic echo /imu/data_raw --field linear_acceleration
 
 ### Step 2.2 — 精化 `base_link → imu_link` 静态 TF
 
-TF 已存在于 `src/mentorpi_bringup/launch/base.launch.py`（`base_to_imu` 节点，当前 z=0.05、零旋转）。按 Step 2.1 的判断修改其 RPY 参数；平移用尺子量控制板位置填入（平移对 gyro/orientation 融合几乎无影响，轴向对齐才关键）。
+TF 现在由 `mentorpi_description/urdf/mecanum.xacro` 的 `imu_joint` 经 robot_state_publisher 发布。按 Step 2.1 的判断修改其 RPY；平移用尺子量控制板位置填入（平移对 gyro/orientation 融合几乎无影响，轴向对齐才关键）。
 
 ### Step 2.3 — Gyro bias
 
@@ -176,9 +176,27 @@ ros2 topic echo /imu/data_raw --field angular_velocity > /tmp/gyro.log
 
 ## Part 3 — Gemini 2L 相机外参标定
 
-校准 `src/mentorpi_bringup/launch/base.launch.py` 中 `base_to_camera` 静态 TF（当前是占位估计值 x=0.05, z=0.15, 无旋转；相机现在常驻 base，不在 rtabmap launch 里）。
+相机外参保存在 `src/mentorpi_description/urdf/mecanum.xacro` 的 `camera_joint` 中。2026-07-12 已完成 AprilTag 手眼标定，当前值为 `xyz=0.0846 0.0231 0.095`、`rpy=-0.0032 0.0149 -0.0422`；其中 z 是尺量固定值，位置-only 残差约 9mm。
 
 **方法选择：AprilTag（精标方法 B）+ 后续自研标定工具**
+
+### 标定结果写回 URDF
+
+默认求解只打印 `camera_joint`，不修改文件。确认数据质量后可显式写回：
+
+```bash
+python scripts/calibrate_camera_extrinsic.py --solve-only /tmp/calib_run \
+  --update-xacro --max-update-rms-mm 20
+colcon build --packages-select mentorpi_description mentorpi_bringup
+source install/setup.bash
+xacro src/mentorpi_description/urdf/mentorpi.xacro runtime_mode:=true \
+  > /tmp/mentorpi_runtime.urdf
+check_urdf /tmp/mentorpi_runtime.urdf
+```
+
+脚本只替换 `mecanum.xacro` 中唯一的 `camera_joint/origin`，写入前验证
+XML，并使用临时文件原子替换。若位置 RMS 超过阈值、目标 joint 不唯一或 XML
+无效，会拒绝修改。相机高度仍由 `--cam-z` 提供，写回前必须确认尺量值。
 
 ### 原理
 
@@ -207,8 +225,8 @@ sudo apt install ros-jazzy-apriltag ros-jazzy-apriltag-ros
 后续用户会开发标定工具（暂定包名 `mentorpi_calibration` 或类似），把以上流程自动化：
 
 - 收集多帧 tag 观测取平均（降低单帧噪声）
-- 输出 `static_transform_publisher` 的 6 个 launch 参数
-- 可选：直接修改 `rtabmap_mapping.launch.py`
+- 输出 camera_joint 的 xyz/rpy 参数
+- 可选：直接更新 `mecanum.xacro` 的 `camera_joint`
 
 > 由于第 3 步依赖 base_link 的运动可信度，**必须先完成 Part 1 + Part 2**，否则相机外参会吸收里程计误差。
 

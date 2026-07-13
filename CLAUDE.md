@@ -118,7 +118,7 @@ map → odom → base_link → camera_link → camera_*_optical_frame
                          (static, z=0.18m)
 ```
 
-**相机-底盘标定**:`base_link → camera_link` 静态 TF 在 `base.launch.py` 里手填(默认 x=0.05, z=0.15, 无旋转,**只是估计值,需用尺子量后校准**)。如果相机有俯仰角(如低头看地面),记得填 RPY 的 pitch(弧度制)。
+**固定 TF 的源头是 URDF**:`base_link → imu_link/camera_link/laser_frame` 由 `mentorpi_description/urdf/mecanum.xacro` 定义,`base.launch.py` 里的 robot_state_publisher 以 `runtime_mode:=true` 渲染发布(该模式省略 `base_footprint`——EKF 拥有 odom→base_link——和 Orbbec 驱动自己发的 optical frames)。相机外参已于 2026-07-12 AprilTag 手眼标定(`camera_joint`: xyz=0.0846 0.0231 0.095, rpy=-0.0032 0.0149 -0.0422,z 为尺量固定值);重标后可用 `scripts/calibrate_camera_extrinsic.py --update-xacro` 写回。轮子是 continuous joint,由 joint_state_publisher 发零位 `/joint_states` 补齐 TF(无编码器)。
 
 **相机生命周期**:Gemini 2L 在 `base.launch.py` 里**常驻**(15fps RGB-D),`/camera/color/image_raw` 始终可订,跨模式切换不重启相机。`slam_3d` 模式只在已运行的相机流上加 rtabmap + 点云;2D / loc / idle 模式也能直接用相机预览(虽然没用到 depth)。永久代价:相机 driver ~15-20% CPU on Pi 5。
 
@@ -131,6 +131,7 @@ map → odom → base_link → camera_link → camera_*_optical_frame
 | `mentorpi_motion` | Python | `motion_node` | 有界运动原语 action server（语音/VLA/agent 的执行底座，base.launch 常驻） |
 | `mentorpi_teleop` | Python | `teleop_node` | Joystick mapping |
 | `mentorpi_bringup` | Python | — | Launch files and config (see below) |
+| `mentorpi_description` | Python | — | URDF/xacro + STL meshes;`runtime_mode` arg 区分真机 TF 模型与离线完整模型 |
 | `mentorpi_supervisor` | Python | `supervisor_node` | Mode switcher; subprocess-launches slam_2d/slam_3d/loc_2d on request |
 | `oradar_lidar` | C++ (ament_cmake) | `oradar_scan` | MS200 lidar driver |
 
@@ -153,7 +154,7 @@ Architecture: **base 常驻 + 模式按需挂载**。`base.launch.py` 在 `remot
 
 | File | Package | Description |
 |------|---------|-------------|
-| `base.launch.py` | mentorpi_bringup | 常驻硬件: base_node + STM32 IMU Madgwick + EKF + camera_watchdog (托管 Gemini 2L) + joy + teleop + lidar + base→camera/laser TF |
+| `base.launch.py` | mentorpi_bringup | 常驻硬件: base_node + STM32 IMU Madgwick + EKF + camera_watchdog (托管 Gemini 2L) + joy + teleop + lidar + robot_state_publisher (URDF 固定 TF: imu/camera/laser) + joint_state_publisher (轮子零位) |
 | `camera.launch.py` | mentorpi_bringup | Gemini 2L (RGB-D 15fps, IMU off)。**不直接进别的 launch** —— 由 `camera_watchdog` 节点 spawn 并监测 `/camera/depth/camera_info`,帧停发 >20s 或进程死亡时自动 `usbreset` + 重启 driver(修 openUsbDevice 卡死) |
 | `slam_2d.launch.py` | mentorpi_bringup | 仅 slam_toolbox 异步建图 |
 | `slam_3d.launch.py` | mentorpi_bringup | 仅 rtabmap + point_cloud_xyzrgb (相机已在 base 里跑)；融合 lidar `/scan` 做 NeighborLinkRefining + proximity detection 抗轮速打滑 |
@@ -362,12 +363,15 @@ rviz2
 
 ### Static TF Configuration
 
-| Parent | Child | Translation (m) | Rotation (rad, ZYX) | Notes |
-|--------|-------|-----------------|---------------------|-------|
-| `base_link` | `camera_link` | x=0.05, z=0.15 | 0 0 0 (yaw pitch roll) | **占位估计值,需用尺子量后改** — 平移误差 → 点云整体偏移;旋转误差 → 点云累积"分层"伪影 |
-| `base_link` | `laser_frame` | z=0.18 | 0 0 0 | Lidar mount 高度 |
+固定 TF 全部来自 `mentorpi_description/urdf/mecanum.xacro`(robot_state_publisher 发布,不再用 static_transform_publisher):
 
-如果相机有俯仰角(常见,如低头看地面),`base_to_camera` 的 pitch 字段填弧度制(`10° ≈ 0.1745`)。
+| Joint | Parent → Child | xyz (m) | rpy (rad) | Notes |
+|-------|----------------|---------|-----------|-------|
+| `camera_joint` | `base_link → camera_link` | 0.0846 0.0231 0.095 | -0.0032 0.0149 -0.0422 | AprilTag 手眼标定 2026-07-12,z 尺量固定;重标用 `calibrate_camera_extrinsic.py --update-xacro` 写回 |
+| `laser_joint` | `base_link → laser_frame` | 0 0 0.18 | 0 0 0 | z 已实测;x/y 与 yaw 待精量(TODO) |
+| `imu_joint` | `base_link → imu_link` | 0 0 0.05 | 0 0 0 | 估计值,Part 2 标定精化 |
+
+平移误差 → 点云整体偏移;旋转误差 → 点云累积"分层"伪影。改完 xacro 需 `colcon build --packages-select mentorpi_description` 后重启 base。
 
 ## Extending the System
 

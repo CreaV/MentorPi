@@ -7,10 +7,9 @@
 
 ### Part 1 — 轮速里程计（先做，否则相机外参会吸收里程计误差）
 
-- [ ] **Step 1.1 轮径 `wheel_diameter`**：地贴 5m 卷尺，`/usr/bin/python3.12
-      scripts/odom_calib.py` 锁原点 → 手柄匀速直行 ~3m 停稳 → Enter 读
-      `dist=d`，卷尺量实际 `D`，`wheel_diameter_new = old × D / d`。
-      正反向各 3 次取平均。
+- [x] **Step 1.1 轮径 `wheel_diameter`**(2026-07-05 完成,0.065→0.0636,
+      1m 误差 <5mm,已是 base_node 默认值)：地贴 5m 卷尺，
+      `scripts/odom_calib.py` 锁原点 → 匀速直行 ~3m → 卷尺比对。
 - [ ] **Step 1.2 轴距和 `wheelbase + track_width`**：轮径标完后做。
       `timeout 5.24 ros2 topic pub -r 20 /cmd_vel geometry_msgs/Twist
       '{angular: {z: 0.3}}'`（理论 90°），odom_calib 读 `dyaw=ω`，激光投点/
@@ -26,9 +25,9 @@
 - [ ] **Step 2.1 轴向检查**：车静止水平，`ros2 topic echo /imu/data_raw
       --field linear_acceleration` 应见 `az≈+9.81, ax/ay≈0`；向前推车
       `ax` 应为正。异常按 calibration.md 判据表修 `base_to_imu` 的 RPY。
-- [ ] **Step 2.2 精化 `base_link → imu_link` TF**：TF 已在
-      `base.launch.py`（z=0.05、零旋转为估计值），按 2.1 结果改 RPY，
-      平移尺子量。
+- [ ] **Step 2.2 精化 `base_link → imu_link` TF**：TF 现由
+      `mecanum.xacro` 的 `imu_joint` 发布（z=0.05、零旋转为估计值），
+      按 2.1 结果改 RPY，平移尺子量。
 - [x] **Step 2.3 Gyro 零偏**(2026-07-12 在线估计上线)：绝对静止 60s 记录 `angular_velocity` 均值
       （典型 0.001~0.01 rad/s）。长期方案见下面代码项（启动自估计）。
 - [ ] **Step 2.4 Gyro_z 比例**：原地转实测 360°（物理量角），积分 gyro.z
@@ -46,14 +45,20 @@
       反推 `T_base_camLink = T_base_tag × T_camOptical_tag⁻¹ ×
       T_optical_camLink`。多帧取平均。依赖：`sudo apt install
       ros-jazzy-apriltag ros-jazzy-apriltag-ros`。
-- [ ] 自研标定工具（暂定 `mentorpi_calibration` 包）：自动化上述流程，
-      输出 static_transform_publisher 6 参数。
+- [ ] 自研标定工具（暂定 `mentorpi_calibration` 包）：自动化上述流程。
+      写回链路已有：`calibrate_camera_extrinsic.py --update-xacro` 直接
+      原子更新 `mecanum.xacro` 的 `camera_joint`（RMS 超阈值拒绝）。
 - [ ] **验收**：rtabmap 点云无"分层"伪影，地面厚度 < 2cm。
 
-### 激光雷达 yaw 对齐（顺手项）
+### 激光雷达外参精化（顺手项）
 
-- [ ] 车正对平墙，RViz 里 `/scan` 墙面线应与相机点云墙面重合、且垂直于
-      x 轴；有偏差改 `base_to_laser` 的 yaw。z=0.18 已实测无需动。
+- [ ] **yaw 对齐**：车正对平墙，RViz 里 `/scan` 墙面线应与相机点云墙面
+      重合、且垂直于 x 轴；有偏差改 `mecanum.xacro` 里 `laser_joint`
+      的 rpy yaw。z=0.18 已实测无需动。
+- [ ] **x/y 尺量**：2026-07-13 TF 迁入 URDF 时 `laser_joint` 取了
+      x=y=0，但 vendor CAD 给的是 x=-0.012；避障 guard 的 stop/slow
+      距离从雷达中心起算，这 1.2cm 直接吃进安全余量。下次上尺子顺手
+      量了填回。
 
 ## 2. 代码待做
 

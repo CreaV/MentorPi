@@ -12,14 +12,43 @@ rtabmap on top of the already-running camera streams.
 """
 import os
 from launch import LaunchDescription
+from launch.substitutions import Command
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 from ament_index_python.packages import get_package_share_directory
 
 
 def generate_launch_description():
     bringup_dir = get_package_share_directory('mentorpi_bringup')
+    description_dir = get_package_share_directory('mentorpi_description')
+    robot_xacro = os.path.join(description_dir, 'urdf', 'mentorpi.xacro')
 
     return LaunchDescription([
+        # Fixed geometry comes from xacro. Runtime mode omits base_footprint
+        # (EKF owns odom->base_link) and Orbbec-owned camera internal frames.
+        Node(
+            package='robot_state_publisher',
+            executable='robot_state_publisher',
+            name='robot_state_publisher',
+            output='screen',
+            parameters=[{
+                'robot_description': ParameterValue(
+                    Command(['xacro ', robot_xacro, ' runtime_mode:=true']),
+                    value_type=str,
+                ),
+            }],
+        ),
+
+        # Zero-position /joint_states for the wheel joints (no encoder
+        # feedback on this base); without it robot_state_publisher leaves
+        # the four continuous wheel joints out of TF and viewers show a
+        # wheelless robot model. Reads /robot_description topic.
+        Node(
+            package='joint_state_publisher',
+            executable='joint_state_publisher',
+            name='joint_state_publisher',
+        ),
+
         # Serial driver -- /odom 50Hz + /imu/data_raw. odom TF provided by EKF.
         Node(
             package='mentorpi_base',
@@ -91,40 +120,6 @@ def generate_launch_description():
             executable='teleop_node',
             name='mentorpi_teleop',
             output='screen',
-        ),
-
-        # base_link -> laser_frame
-        Node(
-            package='tf2_ros',
-            executable='static_transform_publisher',
-            name='base_to_laser',
-            arguments=['0', '0', '0.18', '0', '0', '0', 'base_link', 'laser_frame'],
-        ),
-
-        # base_link -> imu_link (STM32 IMU on the controller board). Without
-        # this TF robot_localization cannot transform /imu/data (frame_id
-        # 'imu_link') into base_link and silently drops every IMU measurement.
-        # Translation barely matters for gyro/orientation fusion; axis
-        # alignment does — adjust RPY here if the board is mounted rotated.
-        Node(
-            package='tf2_ros',
-            executable='static_transform_publisher',
-            name='base_to_imu',
-            arguments=['0', '0', '0.05', '0', '0', '0', 'base_link', 'imu_link'],
-        ),
-
-        # base_link -> camera_link. AprilTag 手眼精标 2026-07-12
-        # (scripts/calibrate_camera_extrinsic.py, 平板显示 tag36h11,
-        # 3 组独立数据取中位数, 位置-only 残差 ~9mm):
-        # 光心比外壳尺量值靠后 (x 0.143→0.085), 相机装偏: 左移 2.3cm、
-        # 朝向偏右 2.4°、微低头 0.9°。z 用尺量值固定 (平面运动不可观测)。
-        Node(
-            package='tf2_ros',
-            executable='static_transform_publisher',
-            name='base_to_camera',
-            arguments=['0.0846', '0.0231', '0.095',
-                       '-0.0422', '0.0149', '-0.0032',
-                       'base_link', 'camera_link'],
         ),
 
         # MS200 lidar
