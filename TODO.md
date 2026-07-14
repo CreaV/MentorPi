@@ -48,6 +48,11 @@
 - [ ] 自研标定工具（暂定 `mentorpi_calibration` 包）：自动化上述流程。
       写回链路已有：`calibrate_camera_extrinsic.py --update-xacro` 直接
       原子更新 `mecanum.xacro` 的 `camera_joint`（RMS 超阈值拒绝）。
+- [ ] **⚠️ 重标（2026-07-14 触发）**：相机螺丝松动、已重新拧紧，俯仰角可能变了
+      → 2026-07-12 的外参失效，须重跑。快速修复：`python scripts/calibrate_camera_extrinsic.py
+      ws://192.168.8.117:9090 --tag-size 0.1175 --update-xacro`（idle 模式 + 平板
+      tag36h11 + 充足光照），Pi 上 `colcon build --packages-select mentorpi_description`
+      + 重启 base。**必须先于白天重扫建图**，否则重扫吃旧外参。无"只标 pitch"捷径——AprilTag 法整套重解。
 - [ ] **验收**：rtabmap 点云无"分层"伪影，地面厚度 < 2cm。
 
 ### 激光雷达外参精化（顺手项）

@@ -14,7 +14,8 @@
   <!-- ===== 几何参数（与 base_node.py 同步） ===== -->
   <xacro:property name="wheelbase"     value="0.1368"/>
   <xacro:property name="track_width"   value="0.1410"/>
-  <xacro:property name="wheel_diameter" value="0.065"/>
+  <xacro:property name="wheel_diameter" value="0.0636"/>  <!-- Step 1.1 calibrated 2026-07-05, synced with base_node.py -->
+
   <xacro:property name="wheel_radius"  value="${wheel_diameter/2}"/>
   <xacro:property name="x_off"         value="${wheelbase/2}"/>     <!-- 0.0684 -->
   <xacro:property name="y_off"         value="${track_width/2}"/>   <!-- 0.0705 -->
@@ -91,8 +92,12 @@
   <joint name="imu_joint" type="fixed">
     <parent link="base_link"/>
     <child link="imu_link"/>
-    <!-- Runtime estimate; refine position and axes in Part 2. -->
-    <origin xyz="0 0 0.05" rpy="0 0 0"/>
+    <!-- STM32 board center ruler-measured 5.4cm behind base center, laterally
+         symmetric; z est. Translation is cosmetic: EKF fuses only gyro vyaw
+         and Madgwick only the gravity vector, both position-independent. Only
+         RPY axis alignment matters; static read (az≈+9.8, ax/ay small)
+         confirms z-up, no axis flip. Refine RPY in Part 2 if board is skewed. -->
+    <origin xyz="-0.054 0 0.05" rpy="0 0 0"/>
   </joint>
 
   <!-- ===== Camera (AprilTag hand-eye calibrated 2026-07-12) ===== -->
@@ -156,8 +161,9 @@
   <joint name="laser_joint" type="fixed">
     <parent link="base_link"/>
     <child link="laser_frame"/>
-    <!-- Current measured runtime value; x/y and RPY still need survey. -->
-    <origin xyz="0 0 0.18" rpy="0 0 0"/>
+    <!-- x: ruler-measured 1.4cm behind base center; y: laterally centered;
+         z: measured. RPY (mounting yaw) still to be refined via wall line-fit. -->
+    <origin xyz="-0.014 0 0.18" rpy="0 0 0"/>
   </joint>
 
 </robot>
