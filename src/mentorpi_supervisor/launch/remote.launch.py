@@ -105,6 +105,23 @@ def generate_launch_description():
             parameters=[{'lazy': True}],
         ),
 
+        # 远程查看用的低频深度流 (2Hz)。为什么用 raw 而不是压缩流:
+        #   /camera/depth/image_raw/compressed     -> 只广播、发 0 字节
+        #       (compressed_image_transport 编不了 16UC1)
+        #   /camera/depth/image_raw/compressedDepth -> 数据有效, 但 PNG 前面有
+        #       12 字节 ROS ConfigHeader, Foxglove 解不了 -> 面板黑屏
+        # raw 16UC1 是 Foxglove 必定能渲染的格式(还能 hover 读出真实 mm 值)。
+        # 代价: 640x480x2B x 2Hz ≈ 10 Mbps —— 但 lazy 保证没人看时一点都不发。
+        Node(
+            package='topic_tools',
+            executable='throttle',
+            name='viewer_depth_throttle',
+            output='screen',
+            arguments=['messages', '/camera/depth/image_raw',
+                       '2.0', '/viewer/depth_raw'],
+            parameters=[{'lazy': True}],
+        ),
+
         Node(
             package='rosbridge_server',
             executable='rosbridge_websocket',
