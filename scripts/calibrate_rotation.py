@@ -30,8 +30,8 @@ import sys
 import numpy as np
 
 AIRE_PATH_DEFAULT = "/media/luo/Game/data/code/AIRE"
-WHEELBASE = 0.1368      # base_node.py 当前值
-TRACK_WIDTH = 0.1410
+WHEELBASE = 0.1528      # base_node.py 当前值 (有效几何, 2026-07-16 标定)
+TRACK_WIDTH = 0.1575
 
 
 def wrap_pi(a: float) -> float:
@@ -189,9 +189,11 @@ async def run_direction(robot: Robot, sign: int, turns: int, speed: float):
 
 
 def report(results: list):
-    actual = sum(r[0] for r in results)
-    odom = sum(r[1] for r in results)
-    ekf = sum(r[2] for r in results)
+    # 每个方向内部符号一致(CCW 全正/CW 全负),跨方向直接求和会相消,
+    # 比值失真 —— 取绝对值累加(k 是比值,与旋转方向无关)。
+    actual = sum(abs(r[0]) for r in results)
+    odom = sum(abs(r[1]) for r in results)
+    ekf = sum(abs(r[2]) for r in results)
     print(f"\n===== totals over {len(results)} direction run(s) =====")
     print(f"actual (laser): {math.degrees(actual):9.2f}°")
     print(f"odom  (cmd):    {math.degrees(odom):9.2f}°")

@@ -10,10 +10,11 @@
 - [x] **Step 1.1 轮径 `wheel_diameter`**(2026-07-05 完成,0.065→0.0636,
       1m 误差 <5mm,已是 base_node 默认值)：地贴 5m 卷尺，
       `scripts/odom_calib.py` 锁原点 → 匀速直行 ~3m → 卷尺比对。
-- [ ] **Step 1.2 轴距和 `wheelbase + track_width`**：轮径标完后做。
-      `timeout 5.24 ros2 topic pub -r 20 /cmd_vel geometry_msgs/Twist
-      '{angular: {z: 0.3}}'`（理论 90°），odom_calib 读 `dyaw=ω`，激光投点/
-      量角器量实际 `θ`，`(W+T)_new = (W+T)_old × ω / θ`。
+- [x] **Step 1.2 轴距和 `wheelbase + track_width`**(2026-07-16 完成,
+      `scripts/calibrate_rotation.py` 对墙 line-fit, CCW/CW 各 2 圈):
+      k_geom=1.117 → 0.1368/0.1410 改为 **0.1528/0.1575**(有效几何,
+      含麦轮原地旋转打滑;base_node `_mecanum` 与 mecanum.xacro 已同步)。
+      CCW/CW 差 2.1%,轻微左右不对称,暂不处理(见 Step 1.3)。
 - [ ] **Step 1.3 UMBmark**：4×4m 正方形顺/逆各 5 圈，判断 track_width 偏差
       与左右轮不对称（判据表见 calibration.md）。
 - [x] （已实现 vy_scale 参数,标定后保持 1.0）
@@ -22,16 +23,18 @@
 
 ### Part 2 — STM32 IMU
 
-- [ ] **Step 2.1 轴向检查**：车静止水平，`ros2 topic echo /imu/data_raw
-      --field linear_acceleration` 应见 `az≈+9.81, ax/ay≈0`；向前推车
-      `ax` 应为正。异常按 calibration.md 判据表修 `base_to_imu` 的 RPY。
+- [x] **Step 2.1 轴向检查**(2026-07-14/16 完成)：静态重力
+      ax+0.21/ay+0.29/az+9.56 → z 朝上、板基本水平;CCW 旋转 gz 峰值
+      +0.64 rad/s → z 轴符号符合 REP-103,无需改 RPY。(x/y 平面内朝向
+      未单独验证,但 EKF 只融 gz、Madgwick 只用重力,当前不影响任何消费者)
 - [ ] **Step 2.2 精化 `base_link → imu_link` TF**：TF 现由
       `mecanum.xacro` 的 `imu_joint` 发布（z=0.05、零旋转为估计值），
       按 2.1 结果改 RPY，平移尺子量。
 - [x] **Step 2.3 Gyro 零偏**(2026-07-12 在线估计上线)：绝对静止 60s 记录 `angular_velocity` 均值
       （典型 0.001~0.01 rad/s）。长期方案见下面代码项（启动自估计）。
-- [ ] **Step 2.4 Gyro_z 比例**：原地转实测 360°（物理量角），积分 gyro.z
-      应 = 2π，不等则在 base_node 乘比例系数。
+- [x] **Step 2.4 Gyro_z 比例**(2026-07-16 完成, calibrate_rotation.py):
+      k_gyro=1.0071(CCW +0.65% / CW +0.76%,方向一致 → 真实刻度误差)
+      → base_node 新增 `gyro_scale_z=0.9930`,零偏扣除后应用,可热更新。
 - [ ] **验收**：闭合路径 yaw 闭合误差 < 5°。
 
 ### Part 3 — 相机外参 `base_link → camera_link`（依赖 Part 1+2）

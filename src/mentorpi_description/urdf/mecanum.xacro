@@ -12,8 +12,11 @@
   <xacro:arg name="runtime_mode" default="false"/>
 
   <!-- ===== 几何参数（与 base_node.py 同步） ===== -->
-  <xacro:property name="wheelbase"     value="0.1368"/>
-  <xacro:property name="track_width"   value="0.1410"/>
+  <!-- 有效轴距 (Step 1.2 对墙旋转标定 2026-07-16, k_geom=1.117, 与
+       base_node.py _mecanum 同步; 物理尺量 0.1368/0.1410, 差值为麦轮
+       原地旋转打滑 → 轮子视觉位置比实物略外扩 ~8mm, 属已知取舍) -->
+  <xacro:property name="wheelbase"     value="0.1528"/>
+  <xacro:property name="track_width"   value="0.1575"/>
   <xacro:property name="wheel_diameter" value="0.0636"/>  <!-- Step 1.1 calibrated 2026-07-05, synced with base_node.py -->
 
   <xacro:property name="wheel_radius"  value="${wheel_diameter/2}"/>

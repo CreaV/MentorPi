@@ -241,7 +241,7 @@ Full protocol documented in `docs/hardware_protocol.md`. Critical details:
 - **Motors 1,2 are sign-inverted** in the mecanum kinematics (official SDK convention).
 - **Servo IDs are 1-based.** PWM position is uint16 LE (500-2500 μs range).
 - **IMU (Function=7):** STM32 auto-reports. 24 bytes = 6×float32 LE (ax,ay,az in g; gx,gy,gz in deg/s).
-- **Mecanum parameters:** wheelbase=0.1368m, track_width=0.1410m, wheel_diameter=0.065m.
+- **Mecanum parameters:** 物理尺寸 wheelbase=0.1368m, track_width=0.1410m, wheel_diameter=0.065m（标称）。**代码用标定后的有效值**：wheelbase=0.1528/track_width=0.1575（2026-07-16 对墙旋转标定，含原地旋转打滑）、wheel_diameter=0.0636（2026-07-05 卷尺标定）、gyro_scale_z=0.9930——base_node 与 mecanum.xacro 必须同步。
 
 ## Joystick Mapping (Beitong BTP-KP20D)
 

@@ -1,11 +1,11 @@
 # 实车标定交接文档
 
-> 状态快照：2026-07-14。此文档供下一个会话（Fable）冷启动接手实车标定。
+> 状态快照：2026-07-16（原 07-14 版已过时处就地更新）。此文档供下一个会话（Fable）冷启动接手实车标定。
 > 分支 `feat/voice-vla-extensions`。标定总计划见 `docs/calibration.md`；本文件是**当前进度 + 下一步操作手册**。
 
 ## 一句话现状
 
-TF 树标定分三部分（轮速里程计 → IMU → 相机）。**相机（Part 3）已完成**（2026-07-12 AprilTag 手眼标定，写回 xacro）。**IMU（Part 2）和轮速几何（Part 1）正在做**，进行到一半时**小车没电关机**，需充电后继续。
+TF 树标定分三部分（轮速里程计 → IMU → 相机）。**相机（Part 3）已完成**（2026-07-12 AprilTag 手眼标定，写回 xacro；但 07-14 螺丝重紧后需重标，见 §3.5）。**2026-07-16 已完成**：陀螺 z 符号确认（§1）+ 对墙旋转标定（§2，k_geom=1.117 → 有效轴距 0.1528/0.1575，k_gyro=1.0071 → `gyro_scale_z=0.9930`），详见 TODO.md Step 1.2 / 2.1 / 2.4。**剩余**：§3 方形闭环验收、§3.5 相机外参重标（白天）、Step 5 重扫（白天）、Step 1.3 UMBmark（可选，CCW/CW 差 2.1% 轻微不对称）。
 
 ## 硬件访问（已授权）
 
@@ -45,7 +45,7 @@ TF 树标定分三部分（轮速里程计 → IMU → 相机）。**相机（Pa
 
 前置：小车充满电，摆到**正对一面平墙 1–1.5m**处，四周留 ≥0.5m 空档（原地旋转用，obstacle guard 不拦旋转）。开机确认服务 `systemctl is-active mentorpi-remote` = active，`/battery` voltage 健康。
 
-### 1. 陀螺 z 轴符号确认（就差这一下，Step 2 收尾）
+### 1. ~~陀螺 z 轴符号确认~~（✅ 2026-07-16：CCW 时 gz 峰值 +0.64 rad/s，符号正确，无需改）
 左转（CCW，正角速度）时 `/imu/data_raw` 的 `angular_velocity.z` 应 > 0。命令 CCW 小旋转并读 gz 符号：
 ```bash
 ssh pi@192.168.8.117 'bash -c "
@@ -58,7 +58,7 @@ wait; sort -g /tmp/gz.txt | tail -1"'
 ```
 gz 峰值为正 → 符号正确（左转=正），符合 REP-103，无需改。若为负 → IMU z 轴反装，需在 imu_joint RPY 加 `roll=pi`（或 base_node 里翻 gz 符号，二选一并记录）。
 
-### 2. Step 3 对墙旋转标定（一次出两个结果）
+### 2. ~~Step 3 对墙旋转标定~~（✅ 2026-07-16 完成，结果见 TODO.md Step 1.2/2.4；注意脚本 totals 曾有双向相消 bug，已修——看每段/每方向数据）
 脚本已写好并离线验证过（合成扫描 <0.03° 误差）：`scripts/calibrate_rotation.py`。**在 dev 机跑**（用 aire-venv，有 numpy/websockets），走 rosbridge :9090：
 ```bash
 # dev 机，AIRE 的 venv
@@ -105,6 +105,5 @@ python scripts/calibrate_camera_extrinsic.py ws://192.168.8.117:9090 \
 
 ## base_node 相关常量（改几何后要同步的地方）
 
-- `mentorpi_base/base_node.py` 的几何：`wheelbase=0.1368`、`track_width=0.1410`（第 636-637 行硬编码）、`wheel_diameter=0.0636`（第 122 行 declare_parameter 默认值，Step 1.1 已标定）。
-- `mecanum.xacro` 顶部 `wheelbase`/`track_width`/`wheel_diameter` 属性必须与 base_node 一致。
-- **已核对并修正**：xacro 原为 `wheel_diameter=0.065`，与 base_node 的 0.0636 不一致，本次已改成 **0.0636**（本次未 commit 的改动之一）。wheelbase/track_width 两边当前都是 0.1368/0.1410，待 Step 3 的 k_geom 出来后**两处一起改**。
+- `mentorpi_base/base_node.py` 的几何：`wheelbase=0.1528`、`track_width=0.1575`（`_mecanum` 内硬编码，**有效几何**，2026-07-16 k_geom=1.117 标定；物理尺量 0.1368/0.1410）、`wheel_diameter=0.0636`（declare_parameter 默认值，Step 1.1 已标定）、`gyro_scale_z=0.9930`（Step 2.4，declare_parameter，热更新）。
+- `mecanum.xacro` 顶部 `wheelbase`/`track_width`/`wheel_diameter` 属性必须与 base_node 一致（已同步 0.1528/0.1575/0.0636；轮子视觉位置比实物外扩 ~8mm 是已知取舍）。
