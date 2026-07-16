@@ -70,7 +70,7 @@ python scripts/calibrate_rotation.py ws://192.168.8.117:9090 --turns 2 --speed 0
 - CCW/CW 对称性差 >2% 提示左右轮不对称（UMBmark）。
 以激光墙面 line-fit 为 ground truth。若 rosbridge 拿不到 `/scan`，检查 lidar 和 QoS（脚本内有提示）。
 
-### 3. Step 4 验收（🔶 2026-07-16 CCW 圈 PASS：估计误差 76mm/2.7% + 3.55°；CW 圈没电中断待补。工具换成 `scripts/acceptance_square.py`（激光 ICP 真值，零位精度 0.6mm/0.05°），odom_calib.py 不再需要）
+### 3. ~~Step 4 验收~~（✅ 2026-07-16 双向 PASS：估计误差 CCW 76mm/2.7% + 3.55°，CW 10mm/0.4% + 0.70°。工具换成 `scripts/acceptance_square.py`（激光 ICP 真值，零位精度 0.6mm/0.05°），odom_calib.py 不再需要。Part 1 + Part 2 至此全部收官）
 3×3m 方形闭环，回到起点看 x/y/yaw 残差。可用 `scripts/odom_calib.py`（`/usr/bin/python3.12 scripts/odom_calib.py`，在 Pi 上跑，回车报告 dx/dy/dist/dyaw）辅助分段测量，或直接看闭环漂移。
 
 ### 3.5 ⚠️ 相机外参重标（2026-07-14 新增，白天做，先于 Step 5）
