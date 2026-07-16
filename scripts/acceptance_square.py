@@ -189,8 +189,15 @@ async def run_square(robot: Robot, size: float, speed: float, ccw: bool,
           f"dy={e_ekf[1] * 1000:+.0f}mm dyaw={math.degrees(e_ekf[2]):+.2f}°")
     print(f"  odom-believed:    dx={e_odm[0] * 1000:+.0f}mm "
           f"dy={e_odm[1] * 1000:+.0f}mm dyaw={math.degrees(e_odm[2]):+.2f}°")
-    ok_d = d < 0.05 * path
-    ok_y = abs(math.degrees(dyaw)) < 5.0
+    # 验收对象是"估计误差"= 物理真值 - EKF 认为的位姿变化。physical
+    # closure 里还叠着执行误差(rotate 原语过冲等,EKF 自己看得见,
+    # motion_node 调速的事),不能算在里程计头上。
+    est_t = float(np.hypot(t[0] - e_ekf[0], t[1] - e_ekf[1]))
+    est_y = math.degrees(wrap_pi(dyaw - e_ekf[2]))
+    ok_d = est_t < 0.05 * path
+    ok_y = abs(est_y) < 5.0
+    print(f"  estimation error (physical - ekf): |d|={est_t * 1000:.0f}mm "
+          f"({est_t / path * 100:.1f}%) dyaw={est_y:+.2f}°")
     print(f"  verdict: translation {'PASS' if ok_d else 'FAIL'} "
           f"(<{0.05 * path * 1000:.0f}mm), yaw {'PASS' if ok_y else 'FAIL'} (<5°)")
     return ok_d and ok_y
