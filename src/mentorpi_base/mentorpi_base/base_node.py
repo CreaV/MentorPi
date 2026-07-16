@@ -80,7 +80,12 @@ class MentorPiBase(Node):
         baud = self.get_parameter('baudrate').value
 
         try:
-            self.ser = serial.Serial(None, baud, timeout=0.1)
+            # write_timeout: STM32 卡死(欠压锁死)但 USB 仍枚举时,CDC ACM
+            # 缓冲填满后 write() 会无限阻塞,把主线程连同全部定时器冻住
+            # (odom/battery 全停、无异常无日志,2026-07-16 实测)。加超时让
+            # 它抛 SerialTimeoutException(SerialException 子类)走既有的
+            # 关闭-重连路径,STM32 恢复供电后自动复活。
+            self.ser = serial.Serial(None, baud, timeout=0.1, write_timeout=0.2)
             self.ser.rts = False
             self.ser.dtr = False
             self.ser.setPort(port)
@@ -674,7 +679,8 @@ class MentorPiBase(Node):
             try:
                 port = self.get_parameter('port').value
                 baud = self.get_parameter('baudrate').value
-                self.ser = serial.Serial(None, baud, timeout=0.1)
+                self.ser = serial.Serial(None, baud, timeout=0.1,
+                                         write_timeout=0.2)  # 见 __init__ 注释
                 self.ser.rts = False
                 self.ser.dtr = False
                 self.ser.setPort(port)
