@@ -19,10 +19,24 @@ source install/setup.bash
 
 | 模式 | 命令 | 说明 |
 |------|------|------|
+| **远程操作（生产入口）** | `ros2 launch mentorpi_supervisor remote.launch.py` | base 常驻 + foxglove_bridge + rosbridge + 手机 SPA + supervisor；之后用 `/mode/set` 服务在 `idle`/`slam_2d`/`slam_3d`/`loc_2d`/`loc_3d` 间热切换，不重启 base（开机自启见 `scripts/install-systemd.sh`） |
 | **基础遥控** | `ros2 launch mentorpi_bringup mentorpi.launch.py` | 底盘 + 手柄 + 2D 激光雷达 + IMU/EKF 融合 |
 | **2D 建图** | `ros2 launch mentorpi_bringup mapping.launch.py` | 基础遥控 + slam_toolbox 2D SLAM |
 | **2D 定位** | `ros2 launch mentorpi_bringup localization.launch.py` | 基础遥控 + 加载已有 2D 地图定位 |
 | **3D 建图** | `ros2 launch mentorpi_bringup rtabmap_mapping.launch.py` | EKF (轮速+IMU) 前端 + RTAB-Map (Gemini 2L RGB-D) 后端，异构架构 |
+
+supervisor 模式切换示例（生产用法，地图文件按需替换）：
+
+```bash
+# 3D 建图到指定库（新文件名 = 新图；同名 = 增量续图，可加 load_all_nodes: true）
+ros2 service call /mode/set mentorpi_msgs/srv/SetMode \
+  "{mode: slam_3d, database_path: /home/pi/rtabmap_maps/room.db}"
+# 3D 定位（重启后恢复 map 系位姿）
+ros2 service call /mode/set mentorpi_msgs/srv/SetMode \
+  "{mode: loc_3d, database_path: /home/pi/rtabmap_maps/room.db}"
+# 停止 SLAM 回到纯遥控
+ros2 service call /mode/set mentorpi_msgs/srv/SetMode "{mode: idle}"
+```
 
 ### 依赖安装
 
@@ -257,6 +271,51 @@ rviz2
 
 Fixed Frame 设为 `map`（建图/定位时）或 `odom`（无 SLAM 时）。
 
+### 3D 查看方式一览
+
+| 方式 | 客户端 | 连接 | 特点 |
+|------|--------|------|------|
+| **Foxglove Studio** | 桌面 app | `ws://<robot-ip>:8765` | 日常主力；导入 `src/mentorpi_supervisor/foxglove_layout/mentorpi.json` 布局；图像面板务必订 `/camera/color/image_raw/compressed` |
+| **手机 SPA** | 手机/平板浏览器 | `http://<robot-ip>:8000/` | 虚拟摇杆遥控 + MJPEG 视频 + 模式切换，无外网可用 |
+| **RViz2** | 远程 PC | DDS 直连 | 见上节配置表 |
+| **Rerun (live_rerun.py)** | 查看端 PC / 手机 | foxglove :8765（默认）或 rosbridge :9090 | 3DGS splat / SLAM 点云 + 实时机器人位姿 + 相机视锥 + 视频，Pi 零负担 |
+
+```bash
+# dev 机（venv 需 rerun + rosbags + websockets + numpy）：
+python scripts/live_rerun.py --robot <robot-ip> \
+    --cloud gs_work/gs_dataset_xxx/sparse_pc.ply      # 点云版
+python scripts/live_rerun.py --robot <robot-ip> \
+    --splat gs_work/exports/splat/splat.ply           # 3DGS 版
+# 加 --serve 可用手机浏览器打开（URL 里的 + 要编码为 %2B）
+```
+
+机器人切 `loc_3d` 模式后，rtabmap 重定位发布 `map→odom`，Rerun 里的机器人会出现在 splat/点云场景中的真实位置。
+
+### 3D 重构：高斯泼溅 (3DGS) 管线
+
+完整文档见 **`docs/gaussian_splatting.md`**。四步走，坐标系全程锁定 ROS `map` 系（训练出的 splat 与 SLAM 地图天然对齐，重定位即可把机器人"放进"场景）：
+
+```bash
+# 1. 建图（机器人上，slam_3d 模式慢速多角度扫，db 自动落盘）
+
+# 2. 导出 nerfstudio 数据集（dev 机，需 ros-jazzy-rtabmap 的 rtabmap-export）
+python3 scripts/export_gs_dataset.py <path>/room.db --output-dir gs_work/gs_dataset_room
+#    产物：transforms.json（回环优化后位姿）+ images/ + depth/ + sparse_pc.ply（种子点云）
+
+# 3. 训练 splatfacto（nerfstudio 环境；三个 flag 缺一不可——保持 map 坐标系）
+ns-train splatfacto --data gs_work/gs_dataset_room \
+    --viewer.quit-on-train-completion True \
+    nerfstudio-data --orientation-method none --center-method none --auto-scale-poses False
+
+# 4. 导出 splat.ply 并查看
+TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1 ns-export gaussian-splat \
+    --load-config outputs/gs_dataset_room/splatfacto/<timestamp>/config.yml \
+    --output-dir exports/splat/
+python scripts/live_rerun.py --robot <robot-ip> --splat exports/splat/splat.ply
+```
+
+注意：相机外参重标后旧 db 的几何随之失效，重训 splat 应使用**新外参重扫的库**（换新 db 文件名，别在旧库上增量）。离线调试可用 `scripts/bag_to_rerun.py` 回放 bag。
+
 ---
 
 ## 硬件说明
@@ -281,11 +340,14 @@ Fixed Frame 设为 `map`（建图/定位时）或 `odom`（无 SLAM 时）。
 
 ### 底盘参数
 
-| 参数 | 值 |
-|------|-----|
-| 前后轴距 (wheelbase) | 0.1368 m |
-| 左右轴距 (track_width) | 0.1410 m |
-| 轮径 (wheel_diameter) | 0.065 m |
+| 参数 | 物理尺寸 | 代码用值（标定后） |
+|------|---------|------------------|
+| 前后轴距 (wheelbase) | 0.1368 m | **0.1528 m**（2026-07-16 对墙旋转标定，有效几何含麦轮原地旋转打滑） |
+| 左右轴距 (track_width) | 0.1410 m | **0.1575 m**（同上） |
+| 轮径 (wheel_diameter) | 0.065 m（标称） | **0.0636 m**（2026-07-05 卷尺标定） |
+| 陀螺 z 刻度 (gyro_scale_z) | — | **0.9930**（2026-07-16） |
+
+标定值在 `mentorpi_base/base_node.py` 与 `mentorpi_description/urdf/mecanum.xacro` 中**必须保持同步**；标定方法见 `docs/calibration.md` 与 `docs/calibration_handoff.md`。
 
 ### 设备列表
 
@@ -372,4 +434,7 @@ rtabmap 节点：`subscribe_odom_info: false`，`Rtabmap/DetectionRate: 2.0`，`
 
 - **官方 SDK**：`/home/pi/workdir/mentorpi/src/`（协议参考，勿修改）
 - **硬件协议详情**：`docs/hardware_protocol.md`
+- **高斯泼溅 3D 重构管线**：`docs/gaussian_splatting.md`
+- **标定总计划 / 实车标定手册**：`docs/calibration.md` / `docs/calibration_handoff.md`
+- **供电排障**：`docs/power_troubleshooting.md`
 - **Claude Code 开发指引**：`CLAUDE.md`
