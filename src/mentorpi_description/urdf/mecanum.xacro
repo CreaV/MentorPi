@@ -10,6 +10,8 @@
 <robot name="mentorpi_mecanum" xmlns:xacro="http://ros.org/wiki/xacro">
 
   <xacro:arg name="runtime_mode" default="false"/>
+  <xacro:arg name="with_so101" default="false"/>
+  <xacro:include filename="$(find mentorpi_description)/urdf/so101.xacro"/>
 
   <!-- ===== 几何参数（与 base_node.py 同步） ===== -->
   <!-- 有效轴距 (Step 1.2 对墙旋转标定 2026-07-16, k_geom=1.117, 与
@@ -161,12 +163,122 @@
       <geometry><mesh filename="package://mentorpi_description/meshes/mecanum/lidar_Link.STL"/></geometry>
     </collision>
   </link>
-  <joint name="laser_joint" type="fixed">
-    <parent link="base_link"/>
-    <child link="laser_frame"/>
-    <!-- x: ruler-measured 1.4cm behind base center; y: laterally centered;
-         z: measured. RPY (mounting yaw) still to be refined via wall line-fit. -->
-    <origin xyz="-0.014 0 0.18" rpy="0 0 0"/>
-  </joint>
+  <xacro:unless value="$(arg with_so101)">
+    <joint name="laser_joint" type="fixed">
+      <parent link="base_link"/>
+      <child link="laser_frame"/>
+      <!-- x: ruler-measured 1.4cm behind base center; y: laterally centered;
+           z: measured. RPY (mounting yaw) still to be refined via wall line-fit. -->
+      <origin xyz="-0.014 0 0.18" rpy="0 0 0"/>
+    </joint>
+  </xacro:unless>
+  <xacro:if value="$(arg with_so101)">
+    <joint name="laser_joint" type="fixed">
+      <parent link="base_link"/>
+      <child link="laser_frame"/>
+      <!-- 170 mm printable riser clears the official new-calibration zero pose. -->
+      <origin xyz="-0.014 0 0.35" rpy="0 0 0"/>
+    </joint>
+    <xacro:so101_module
+      parent="base_link"
+      mount_xyz="-0.0409 0 0.0655"
+      mount_rpy="0 0 ${PI}"/>
+
+    <!-- Printed adapter: measured rear spare-hole center + top-plate height. -->
+    <link name="so101_adapter_link">
+      <inertial>
+        <origin xyz="0 0 0.004" rpy="0 0 0"/>
+        <mass value="0.18"/>
+        <inertia ixx="0.000112" ixy="0" ixz="0"
+                 iyy="0.000209" iyz="0" izz="0.000221"/>
+      </inertial>
+      <visual>
+        <geometry>
+          <mesh filename="package://mentorpi_description/meshes/accessories/arm_adapter_plate.stl"
+                scale="0.001 0.001 0.001"/>
+        </geometry>
+        <material name="adapter_orange"><color rgba="0.95 0.35 0.08 1"/></material>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0.004" rpy="0 0 0"/>
+        <geometry><box size="0.118 0.086 0.008"/></geometry>
+      </collision>
+    </link>
+    <joint name="so101_adapter_joint" type="fixed">
+      <parent link="base_link"/>
+      <child link="so101_adapter_link"/>
+      <origin xyz="-0.0409 0 0.0575" rpy="0 0 0"/>
+    </joint>
+
+    <!-- Low front counterweight tray and A1335 envelope; both stay below camera. -->
+    <link name="anker_tray_link">
+      <inertial>
+        <origin xyz="-0.004 0 0.020" rpy="0 0 0"/>
+        <mass value="0.12"/>
+        <inertia ixx="0.00023" ixy="0" ixz="0"
+                 iyy="0.00005" iyz="0" izz="0.00022"/>
+      </inertial>
+      <visual>
+        <geometry>
+          <mesh filename="package://mentorpi_description/meshes/accessories/anker_prime_front_tray.stl"
+                scale="0.001 0.001 0.001"/>
+        </geometry>
+        <material name="tray_blue"><color rgba="0.10 0.35 0.80 1"/></material>
+      </visual>
+      <collision>
+        <origin xyz="-0.004 0 0.029" rpy="0 0 0"/>
+        <geometry><box size="0.05013 0.142 0.058"/></geometry>
+      </collision>
+    </link>
+    <joint name="anker_tray_joint" type="fixed">
+      <parent link="base_link"/>
+      <child link="anker_tray_link"/>
+      <origin xyz="0.130 0 -0.003" rpy="0 0 0"/>
+    </joint>
+    <link name="anker_prime_link">
+      <inertial>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <mass value="0.36"/>
+        <inertia ixx="0.000633" ixy="0" ixz="0"
+                 iyy="0.000127" iyz="0" izz="0.000578"/>
+      </inertial>
+      <visual>
+        <geometry><box size="0.03453 0.1344 0.055"/></geometry>
+        <material name="anker_gray"><color rgba="0.16 0.17 0.19 1"/></material>
+      </visual>
+      <collision><geometry><box size="0.03453 0.1344 0.055"/></geometry></collision>
+    </link>
+    <joint name="anker_prime_joint" type="fixed">
+      <parent link="base_link"/>
+      <child link="anker_prime_link"/>
+      <origin xyz="0.130 0 0.0305" rpy="0 0 0"/>
+    </joint>
+
+    <!-- Riser bottom sits at the former laser mounting plane; top is z=0.350 m. -->
+    <link name="lidar_riser_link">
+      <inertial>
+        <origin xyz="0 0 0.0875" rpy="0 0 0"/>
+        <mass value="0.10"/>
+        <inertia ixx="0.00020" ixy="0" ixz="0"
+                 iyy="0.00020" iyz="0" izz="0.00005"/>
+      </inertial>
+      <visual>
+        <geometry>
+          <mesh filename="package://mentorpi_description/meshes/accessories/lidar_riser.stl"
+                scale="0.001 0.001 0.001"/>
+        </geometry>
+        <material name="riser_orange"><color rgba="0.95 0.35 0.08 1"/></material>
+      </visual>
+      <collision>
+        <origin xyz="-0.022 0 0.0875" rpy="0 0 0"/>
+        <geometry><box size="0.012 0.050 0.175"/></geometry>
+      </collision>
+    </link>
+    <joint name="lidar_riser_joint" type="fixed">
+      <parent link="base_link"/>
+      <child link="lidar_riser_link"/>
+      <origin xyz="-0.014 0 0.175" rpy="0 0 0"/>
+    </joint>
+  </xacro:if>
 
 </robot>

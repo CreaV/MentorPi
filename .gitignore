@@ -14,3 +14,5 @@ rtabmap_maps
 gs_work/
 # 随手拍的接线照片
 IMG_*.jpg
+# CAD viewer cache artifacts (hidden .step.glb derivatives)
+.*.step.glb

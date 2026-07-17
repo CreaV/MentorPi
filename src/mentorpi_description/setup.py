@@ -1,5 +1,6 @@
-import os
 from glob import glob
+import os
+
 from setuptools import setup
 
 package_name = 'mentorpi_description'
@@ -14,7 +15,12 @@ setup(
         (os.path.join('share', package_name, 'launch'), glob(os.path.join('launch', '*.*'))),
         (os.path.join('share', package_name, 'urdf'), glob(os.path.join('urdf', '*.*'))),
         (os.path.join('share', package_name, 'rviz'), glob(os.path.join('rviz', '*.*'))),
-        (os.path.join('share', package_name, 'meshes/mecanum'), glob(os.path.join('meshes/mecanum', '*.*'))),
+        (os.path.join('share', package_name, 'meshes/mecanum'),
+         glob(os.path.join('meshes/mecanum', '*.*'))),
+        (os.path.join('share', package_name, 'meshes/so101'),
+         glob(os.path.join('meshes/so101', '*.*'))),
+        (os.path.join('share', package_name, 'meshes/accessories'),
+         glob(os.path.join('meshes/accessories', '*.*'))),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
