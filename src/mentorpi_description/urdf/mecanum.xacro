@@ -217,7 +217,8 @@
       mount_xyz="-0.155 0 0.0655"
       mount_rpy="0 0 0"/>
 
-    <!-- 悬伸甲板占位: x -0.195..-0.015, y ±0.048, 顶面 z=0.0655 -->
+    <!-- 悬伸甲板 (mechanical/printable/so101_deck_plate.py):
+         x -0.195..-0.015, y ±0.048, 顶面 z=0.0655, 底面纵肋 15 深 -->
     <link name="so101_deck_link">
       <inertial>
         <origin xyz="-0.105 0 -0.004" rpy="0 0 0"/>
@@ -226,8 +227,11 @@
                  iyy="0.000515" iyz="0" izz="0.000659"/>
       </inertial>
       <visual>
-        <origin xyz="-0.105 0 -0.004" rpy="0 0 0"/>
-        <geometry><box size="0.180 0.096 0.008"/></geometry>
+        <origin xyz="-0.105 0 -0.008" rpy="0 0 0"/>
+        <geometry>
+          <mesh filename="package://mentorpi_description/meshes/accessories/so101_deck_plate.stl"
+                scale="0.001 0.001 0.001"/>
+        </geometry>
         <material name="deck_orange"><color rgba="0.95 0.35 0.08 1"/></material>
       </visual>
       <collision>
@@ -239,6 +243,53 @@
       <parent link="base_link"/>
       <child link="so101_deck_link"/>
       <origin xyz="0 0 0.0655" rpy="0 0 0"/>
+    </joint>
+
+    <!-- 臂供电 2S 锂电: 前挂托架 (mechanical/printable/battery_tray_2s.py),
+         兼作前配重抗后倾。包络暂按 2S2200 (105x33x24) —— 购得实物后改
+         PACK_* 重出。托架背面贴底盘前脸 (x=0.109), 挂唇压顶缘。 -->
+    <link name="battery_tray_link">
+      <inertial>
+        <origin xyz="0 0 0.010" rpy="0 0 0"/>
+        <mass value="0.06"/>
+        <inertia ixx="0.00008" ixy="0" ixz="0"
+                 iyy="0.00002" iyz="0" izz="0.00009"/>
+      </inertial>
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+          <mesh filename="package://mentorpi_description/meshes/accessories/battery_tray_2s.stl"
+                scale="0.001 0.001 0.001"/>
+        </geometry>
+        <material name="tray_blue"><color rgba="0.10 0.35 0.80 1"/></material>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0.0155" rpy="0 0 0"/>
+        <geometry><box size="0.0406 0.1126 0.031"/></geometry>
+      </collision>
+    </link>
+    <joint name="battery_tray_joint" type="fixed">
+      <parent link="base_link"/>
+      <child link="battery_tray_link"/>
+      <origin xyz="0.1293 0 0.0305" rpy="0 0 0"/>
+    </joint>
+    <link name="battery_2s_link">
+      <inertial>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <mass value="0.18"/>
+        <inertia ixx="0.000174" ixy="0" ixz="0"
+                 iyy="0.0000250" iyz="0" izz="0.000182"/>
+      </inertial>
+      <visual>
+        <geometry><box size="0.033 0.105 0.024"/></geometry>
+        <material name="lipo_gray"><color rgba="0.25 0.26 0.30 1"/></material>
+      </visual>
+      <collision><geometry><box size="0.033 0.105 0.024"/></geometry></collision>
+    </link>
+    <joint name="battery_2s_joint" type="fixed">
+      <parent link="battery_tray_link"/>
+      <child link="battery_2s_link"/>
+      <origin xyz="0 0 0.015" rpy="0 0 0"/>
     </joint>
   </xacro:if>
 

@@ -98,11 +98,11 @@ def main() -> None:
             points = np.vstack(clouds)
             bounds[name] = (points.min(axis=0), points.max(axis=0))
 
-    for name in ("camera_link", "anker_prime_link", "so101_adapter_link", "lidar_riser_link"):
+    for name in ("camera_link", "battery_2s_link", "battery_tray_link", "so101_deck_link"):
         lo, hi = bounds[name]
         print(name, "min_m", np.round(lo, 4).tolist(), "max_m", np.round(hi, 4).tolist())
     camera_lo, _ = bounds["camera_link"]
-    _, battery_hi = bounds["anker_prime_link"]
+    _, battery_hi = bounds["battery_tray_link"]
     print("battery_to_camera_vertical_clearance_mm", round((camera_lo[2] - battery_hi[2]) * 1000, 1))
     laser_z = world["laser_frame"][2, 3]
     crossings = []

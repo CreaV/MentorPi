@@ -485,6 +485,27 @@ unit 文件在 `scripts/mentorpi-remote.service`,关键点:
 
 **语音接入**：AsynchronousIntentRoutingEngine（独立仓库）的 `robot` skill 通过 rosbridge (:9090) 调上述接口；服务器端设 `AIR_ROBOT_ROSBRIDGE_URL=ws://<robot-ip>:9090` 即启用。手动验证：AIRE 仓库 `python robot_cli.py ws://<robot-ip>:9090 move forward 0.5`。整体规划见 `docs/roadmap.md`。
 
+## SO-101 机械臂集成（布局 v2，机械件待打印装配）
+
+LeRobot SO-101 车载集成，设计决策与几何分析见 `mechanical/README.md` +
+`mechanical/urdf/design-ledger.md`（Codex 初版方案与评审见
+`docs/mentorpi_so101_integration_report.md`，已被 v2 取代）：
+
+- **臂朝前**，基座挂在车尾甲板 `x=-0.155`（真网格 pan 扫掠选点）；Gemini 2L
+  即 VLA context 相机。抓取作业停车进行（motion primitive 安全模型）。
+- **雷达不动**（z=0.18 不变，地图资产保值）。装臂后 oradar 发 `/scan_raw`，
+  `laser_filters` 掩膜后向 ±52° 自体扇区再发 `/scan`（下游无感知）。
+  部署依赖：`sudo apt install ros-jazzy-laser-filters`。
+- **启用开关**：`with_so101:=true`（remote.launch.py → base.launch.py →
+  xacro）。默认 false 时 TF/扫描链路与无臂完全一致；systemd 部署改
+  ExecStart 加参数。离线预览：`display.launch.py with_so101:=true`。
+- **臂供电**：独立 2S 锂电（STS3215 原生 7.4V）+ 保险丝 + 带锁开关，前挂
+  托架兼前配重；不走 USB-PD，不碰 Pi/RRCLite 电源轨。
+- 打印件：`mechanical/printable/so101_deck_plate.py` / `battery_tray_2s.py`
+  （参数化,实测后改常量重出）；间隙复核
+  `mechanical/measurements/check_so101_clearances.py`。
+- **P0 未完成**：底盘后部 4 孔卡尺实测（当前全部按 Codex 网格推测设计）。
+
 ## 3D 可视化 & 高斯泼溅 (Gaussian Splatting)
 
 完整管线见 `docs/gaussian_splatting.md`。要点:

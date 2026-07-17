@@ -1,95 +1,84 @@
-# MentorPi + LeRobot SO-101 mounting kit
+# MentorPi + LeRobot SO-101 mounting kit — layout v2
 
-This directory is the mechanical source of truth for the first printable
-MentorPi/SO-101 integration. STEP is primary; STL is a derived print export.
+This directory is the mechanical source of truth for the SO-101 on-vehicle
+integration. STEP is primary; STL is a derived print export. Every printable
+part keeps a regenerable parametric Python source — after any caliper
+correction, edit the constants and re-run the generators.
 
-## Layout
+## Layout v2 (2026-07-18) — decisions
 
-- The SO-101 deck is centered at base_link x=-40.9 mm, y=0, over four candidate
-  mounting features identified in the repository base STL at approximately
-  x=(-51.0,-30.9) mm, y=+/-24.4 mm. The x=-50.9 mm pair appears only about
-  1.5 mm deep in that mesh, while the x=-30.9 mm pair appears through-going.
-  Disassemble and measure the real chassis before treating any feature as a
-  threaded or through hole. The 8 mm deck uses counterbored M4-clearance holes
-  and the standard SO-101 table clamps; two 20 mm straps are a mandatory
-  secondary restraint.
-- The arm is yawed 180 degrees so the shoulder axis sits toward the rear. This
-  keeps the fixed base away from the calibrated front camera.
-- The Anker pack is a low front counterweight, across the vehicle and below the
-  camera body. The default is Anker Prime A1335 (12,000 mAh/130 W,
-  134.4 x 55 x 34.53 mm, 360 g). If the label is not A1335, edit the three
-  PACK_* constants before printing.
-- The MS200 scan plane moves from 180 to 350 mm above base_link using the
-  170 mm riser. The camera transform is not changed.
+Layout v2 replaces the v1 (Codex) rear-facing-arm + lidar-riser concept:
 
-## Printable outputs
+- **Arm faces forward** (mount yaw 0 at chassis `x=-0.155`): the Gemini 2L is
+  the natural VLA context camera; the gripper enters frame when reaching.
+  Mount x was chosen by real-mesh pan-sweep clearance analysis
+  (`measurements/check_so101_clearances.py`): worst-case over the full ±110°
+  shoulder_pan sweep is 23.1 mm to the lidar head and 11.4 mm to the assumed
+  tower posts.
+- **Lidar stays at z=0.18** on its stock tower — existing 2D/3D map assets
+  remain valid and low-obstacle detection is not degraded. The stowed arm's
+  rear scan sector (±52°, covers the zero-pose ±47° crossing) is removed by a
+  `laser_filters` mask in `base.launch.py` (`with_so101:=true`).
+- **Arm power is a dedicated 2S LiPo** (native 7.4 V for STS3215) instead of
+  the v1 USB-PD 20 V → 7.5 V chain: no PD current ceiling (a multi-servo
+  stall would hard-trip a 65 W PD port and drop the whole arm), fewer parts,
+  and the pack doubles as the front counterweight against the rear arm.
+  Branch: `2S pack -> XT60 -> 7.5 A fuse -> latching switch -> Feetech board`.
+  USB from the Pi (via hub) is data + signal ground only.
+
+Deprecated v1 parts kept for provenance: `arm_adapter_plate` (superseded by
+`so101_deck_plate`), `lidar_riser` (not used — lidar stays put),
+`anker_prime_front_tray` (superseded by `battery_tray_2s`),
+`xiaomi_hub_carrier` (placeholder; revisit when the hub model is known).
+
+## Printable outputs (v2)
 
 | Part | Purpose | Print guidance |
 |---|---|---|
-| arm_adapter_plate | Chassis holes to SO-101 clamp deck | PETG/PETG-CF, 6 walls, 50% gyroid, flat |
-| anker_prime_front_tray | Low front counterweight cradle | PETG, 5 walls, 35% gyroid, two 20 mm straps |
-| lidar_riser | Raise MS200 scan plane by 170 mm | PETG-CF preferred, 6 walls, 45% gyroid |
-| xiaomi_hub_carrier | Model-agnostic hub strap tray | PETG, 4 walls, 25% gyroid |
+| so101_deck_plate | Rear cantilever deck: shim under the (assumed) lidar tower anchors, SO-101 clamp zone aft | PETG-CF preferred, 6 walls, 50% gyroid, print flat (ribs up) |
+| battery_tray_2s | Front-hung 2S LiPo tray / counterweight | PETG, 5 walls, 35% gyroid; two straps mandatory |
 
-Use M4 washers and nyloc nuts on the arm deck. Dry-fit the front tray hooks
-before loading the battery; the STL establishes the chassis envelope, but the
-front lip thickness still needs a caliper check on the physical robot. Never
-rely on the hooks without both straps.
+Chassis-frame placement (URDF `with_so101:=true` is the reference):
 
-## Power selection and wiring
+- Deck spans chassis x −195..−15 mm, y ±48, top at z=+65.5 (8 mm plate on the
+  57.5 mm top plate). Anchors = the four Codex-inferred Ø4.3 features at
+  x=−50.9/−30.9, y=±24.35 (M4 through + top counterbore); assumed shim mode —
+  the lidar tower standoffs re-bolt through the same holes on top of the
+  plate. Cantilever (92 mm past the chassis rear edge) is stiffened by twin
+  15 mm underside ribs + rear web; ribs stop 2 mm shy of the rear face.
+- Tray back face rests on the chassis front face (x=+109), L-hooks over the
+  top edge (throat 6 mm — caliper the wall thickness), pack top at z=+57.5,
+  ~70 mm below and ~60° outside the camera's optical axis.
 
-The two-USB-C Anker Prime description matches A1335. Each port advertises up to
-20 V / 3.25 A, but only 5 V / 3 A; therefore it is not a full-power Pi 5
-5 V / 5 A source.
+## Interface audit before printing (P0)
 
-Recommended arm branch:
+The four chassis anchors are inferred from the repository STL, **not
+measured**. Before printing the deck:
 
-Anker USB-C1 -> HUSB238 PD trigger at 20 V -> 7.5 V buck -> 7.5 A fuse ->
-latching arm switch -> Feetech controller power input
-
-- Preferred buck: Pololu D42V110F7-class 7.5 V high-current regulator, or an
-  equivalent synchronous module rated for 20 V input and at least 8 A output.
-  A D36V50F7-class 5 A regulator is acceptable only with conservative torque
-  limits and may brown out on simultaneous stalls.
-- Use 18 AWG silicone wire on the 7.5 V branch, keep the fuse near the buck
-  output, and set the regulator before connecting any servo.
-- The Feetech USB adapter is data only; its motor bus still requires the power
-  branch. USB establishes signal ground. Do not feed the arm from Pi USB,
-  RRCLite's private bus-servo port, or the Raspberry Pi 5 V rail.
-- Keep Pi 5 on the existing RRCLite 5 V supply while mobile (or the official
-  27 W supply on the bench). A1335's 5 V/3 A PDO would restrict Pi USB power.
-- USB-C2 may power a hub only if the exact Xiaomi hub has a documented PD-in
-  port with upstream back-feed isolation. Otherwise leave the hub bus-powered
-  for data only.
-
-USB topology:
-
-Pi blue USB3 -> Gemini 2L directly
-
-Pi second USB -> Xiaomi hub -> Feetech adapter + low-bandwidth receivers
-
-Keep the camera direct because this repository already records severe dual-stream
-bandwidth loss through the tested hub. A genuinely powered USB3 hub remains the
-fix for high-current camera/lidar peripherals.
-
-The A1335 does not support pass-through operation: stop the arm and disconnect
-its switched branch before charging the power bank.
+1. Identify each candidate feature: through hole / threaded / blind. Measure
+   centers, diameters, usable depth, top-plate thickness.
+2. Establish whether the lidar tower standoffs actually bolt through these
+   holes (shim mode) or elsewhere (then add pass-through holes via
+   `CHASSIS_HOLES`-style parameters and re-run).
+3. Caliper the front-wall thickness for the tray hook throat (`HOOK_THROAT`)
+   and confirm the purchased 2S pack dimensions (`PACK_*`).
 
 ## Assembly and commissioning
 
-1. Inspect the real chassis and identify whether each candidate feature is a
-   shallow recess, threaded hole, or through hole. Measure its center and usable
-   depth before selecting fasteners.
-2. Print the deck or a hole gauge first. Proceed with bolting only after the
-   real interface is confirmed; then clamp and strap the official SO-101 base.
-3. Install the unloaded front tray, check wheel sweep and at least 40 mm ground
-   clearance, then add the power bank and two straps.
-4. Fit the lidar riser and confirm the physical scanner center is 170 mm higher.
-5. Wire power with the arm switch off. Verify 7.5 V polarity and current limit,
-   then connect one servo before the full daisy chain.
-6. Use a folded transport pose, lock /cmd_vel during manipulation, cap joint
-   velocity/torque for the first tests, and repeat drivetrain calibration after
-   the payload is installed.
+1. Print a hole gauge (or the deck at 20% infill) first; never force screws.
+2. Unbolt the lidar tower standoffs, seat the deck, re-bolt through the deck
+   counterbores (longer M4 screws as needed). Strap the SO-101 base in
+   addition to its M4 grid.
+3. Hang the front tray, dry-fit the hook throat, clamp the M4 screws, insert
+   the pack with two straps; check wheel clearance and ground clearance.
+4. Wire the 2S branch with the switch off; verify polarity and fuse, connect
+   one servo, then the full chain.
+5. Re-run `check_so101_clearances.py` with corrected `POSTS`, verify the real
+   camera image bottom edge (tray must not appear), verify /scan self-mask
+   (`config/scan_mask_so101.yaml` angles) with the arm stowed, then repeat
+   drivetrain calibration (`scripts/acceptance_square.py`) under load.
+6. Use a folded transport pose; manipulation happens parked (motion-primitive
+   safety model). Cap joint velocity/torque for first tests.
 
-This is a geometrically validated first-pass kit, not a structural or electrical
-safety certification. Re-run the generators after any caliper correction.
+This is a geometrically validated first-pass kit, not a structural or
+electrical safety certification.
