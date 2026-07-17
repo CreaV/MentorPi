@@ -58,11 +58,11 @@
 - [ ] 自研标定工具（暂定 `mentorpi_calibration` 包）：自动化上述流程。
       写回链路已有：`calibrate_camera_extrinsic.py --update-xacro` 直接
       原子更新 `mecanum.xacro` 的 `camera_joint`（RMS 超阈值拒绝）。
-- [ ] **⚠️ 重标（2026-07-14 触发）**：相机螺丝松动、已重新拧紧，俯仰角可能变了
-      → 2026-07-12 的外参失效，须重跑。快速修复：`python scripts/calibrate_camera_extrinsic.py
-      ws://192.168.8.117:9090 --tag-size 0.1175 --update-xacro`（idle 模式 + 平板
-      tag36h11 + 充足光照），Pi 上 `colcon build --packages-select mentorpi_description`
-      + 重启 base。**必须先于白天重扫建图**，否则重扫吃旧外参。无"只标 pitch"捷径——AprilTag 法整套重解。
+- [x] **⚠️ 重标（2026-07-14 触发,2026-07-17 完成）**：螺丝重紧后 AprilTag 手眼重解,
+      8 站位 RMS 9.7mm：x/y/z = 0.1114/0.0305/0.0950(z 尺量固定),
+      rpy = -0.94°/-7.46°/+0.84°。**pitch 相比 07-12 变了 8.3°**——螺丝
+      松动影响实锤。已写回 xacro 并部署。旧 rtabmap.db 是旧外参建的,
+      重扫建议**换新 db 文件名**(8° 外参差会让新旧会话几何打架)。
 - [ ] **验收**：rtabmap 点云无"分层"伪影，地面厚度 < 2cm。
 
 ### 激光雷达外参精化（顺手项）
@@ -88,6 +88,14 @@
       loc_3d 模式 SIGINT 宽限 ≥30s，且 rtabmap 永不 SIGKILL（超时只告警）。
 - [x] `accel_limit_linear/angular`（已实现,默认 1.5 / 10.0）
       实车调参：手柄阶跃指令下对比 `/odom` 与实际位移，斜坡太缓/太陡都改。
+- [ ] **开机时钟跳变防护（2026-07-17 实战踩坑）**：Pi 无 RTC,fake-hwclock
+      用昨天的时间启动 ROS,随后 NTP 把时钟**运行中前跳 ~22h** → EKF 幻觉
+      (量到反向旋转)、全部话题静默、相机 pipeline 反复死、action 结果丢失。
+      指纹:journalctl 里服务启动时间是"昨天"而 uptime 只有几分钟。
+      临时解:时钟稳定后 restart 服务即愈。长期方案待定夺——unit 加
+      `After=time-sync.target` + systemd-time-wait-sync 最干净,但**无外网
+      时服务永远不启动**(机器人可能离线跑);备选:supervisor 检测大幅
+      clock jump 后自动重启各节点,或 Pi 加 RTC 电池模块。
 - [ ] 地图保存进 supervisor/web UI（目前 2D 靠手动调 serialize_map 服务，
       手机端没有入口）。
 - [ ] Foxglove layout（`mentorpi.json`）补 loc_3d 模式按钮（web SPA 已有）。
