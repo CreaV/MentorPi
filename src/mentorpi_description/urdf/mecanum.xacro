@@ -123,8 +123,8 @@
   <joint name="camera_joint" type="fixed">
     <parent link="base_link"/>
     <child link="camera_link"/>
-    <!-- AprilTag hand-eye calibration, 2026-07-12; z is ruler-fixed. -->
-    <origin xyz="0.0846 0.0231 0.095" rpy="-0.0032 0.0149 -0.0422"/>
+    <!-- AprilTag hand-eye calibration, 2026-07-17; z is ruler-fixed. -->
+    <origin xyz="0.1114 0.0305 0.0950" rpy="-0.0164 -0.1302 0.0147"/>
   </joint>
 
   <!-- Offline preview only; Orbbec owns these frames on hardware. -->
