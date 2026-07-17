@@ -53,10 +53,19 @@ def generate_launch_description():
         DeclareLaunchArgument('spa_port', default_value='8000',
             description='HTTP port serving the static SPA'),
 
+        # SO-101 机械臂物理安装后置 true (透传给 base.launch.py: 臂 TF 树 +
+        # 雷达后向自体掩膜)。systemd 部署改法: mentorpi-remote.service 的
+        # ExecStart 里给 remote.launch.py 加 with_so101:=true。
+        DeclareLaunchArgument('with_so101', default_value='false',
+            description='SO-101 arm installed (passed through to base.launch.py)'),
+
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(
                 os.path.join(bringup_dir, 'launch', 'base.launch.py')
             ),
+            launch_arguments={
+                'with_so101': LaunchConfiguration('with_so101'),
+            }.items(),
         ),
 
         Node(

@@ -12,7 +12,9 @@ rtabmap on top of the already-running camera streams.
 """
 import os
 from launch import LaunchDescription
-from launch.substitutions import Command
+from launch.actions import DeclareLaunchArgument
+from launch.conditions import IfCondition
+from launch.substitutions import Command, LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 from ament_index_python.packages import get_package_share_directory
@@ -23,7 +25,15 @@ def generate_launch_description():
     description_dir = get_package_share_directory('mentorpi_description')
     robot_xacro = os.path.join(description_dir, 'urdf', 'mentorpi.xacro')
 
+    with_so101 = LaunchConfiguration('with_so101')
+
     return LaunchDescription([
+        # SO-101 机械臂已物理安装时置 true: URDF 长出臂 TF 树, 雷达输出
+        # 插入 laser_filters 后向角度掩膜(滤掉收拢臂的自体回波)。
+        # 未装臂保持 false —— TF/扫描链路与从前完全一致。
+        DeclareLaunchArgument('with_so101', default_value='false',
+            description='SO-101 arm installed: arm TF tree + lidar rear-sector mask'),
+
         # Fixed geometry comes from xacro. Runtime mode omits base_footprint
         # (EKF owns odom->base_link) and Orbbec-owned camera internal frames.
         Node(
@@ -33,7 +43,8 @@ def generate_launch_description():
             output='screen',
             parameters=[{
                 'robot_description': ParameterValue(
-                    Command(['xacro ', robot_xacro, ' runtime_mode:=true']),
+                    Command(['xacro ', robot_xacro, ' runtime_mode:=true',
+                             ' with_so101:=', with_so101]),
                     value_type=str,
                 ),
             }],
@@ -122,7 +133,8 @@ def generate_launch_description():
             output='screen',
         ),
 
-        # MS200 lidar
+        # MS200 lidar。装臂时改发 /scan_raw, 由下面的 scan_mask 滤波后
+        # 再发 /scan —— 下游(slam/guard/rtabmap)始终只认 /scan。
         Node(
             package='oradar_lidar',
             executable='oradar_scan',
@@ -131,7 +143,8 @@ def generate_launch_description():
             parameters=[
                 {'device_model': 'MS200'},
                 {'frame_id': 'laser_frame'},
-                {'scan_topic': '/scan'},
+                {'scan_topic': PythonExpression(
+                    ["'/scan_raw' if '", with_so101, "' == 'true' else '/scan'"])},
                 {'port_name': '/dev/ttyUSB0'},
                 {'baudrate': 230400},
                 {'angle_min': 0.0},
@@ -141,5 +154,21 @@ def generate_launch_description():
                 {'clockwise': False},
                 {'motor_speed': 10},
             ],
+        ),
+
+        # SO-101 自体掩膜: 收拢的机械臂占据雷达后向 ~±52° 扇区, 把这些
+        # 自体回波从 /scan 里剔除, 否则 slam_toolbox/rtabmap 会把"跟着
+        # 机器人走的常量弧"当环境特征, guard 会把自己的臂当持续障碍。
+        # 代价: 该扇区内的真实障碍也不可见 -> 倒车靠 depth/低速策略兜底。
+        # 角度见 config/scan_mask_so101.yaml, 装臂实测后按需修。
+        # 依赖: sudo apt install ros-jazzy-laser-filters
+        Node(
+            package='laser_filters',
+            executable='scan_to_scan_filter_chain',
+            name='scan_mask',
+            output='screen',
+            remappings=[('scan', '/scan_raw'), ('scan_filtered', '/scan')],
+            parameters=[os.path.join(bringup_dir, 'config', 'scan_mask_so101.yaml')],
+            condition=IfCondition(with_so101),
         ),
     ])

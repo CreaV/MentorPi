@@ -1,0 +1,31 @@
+# SO-101 装臂后的雷达自体掩膜 (laser_filters scan_to_scan_filter_chain)。
+#
+# 收拢(stow)的机械臂在雷达后向占据 ~±52° 扇区(臂基座中心 x=-0.115,
+# 雷达在 x=-0.014, 甲板半宽 0.048 -> atan2 最宽 ~47°, 留 5° 余量)。
+# InPlace 滤波把区间内的量测置为无效值, 点数/角度栅格不变。
+#
+# 角度是 LaserScan 自身角坐标(rad, x 前方=0)。驱动可能用 0..2π 或
+# -π..π 两种表示, 这里三段区间把"后向 ±0.9 rad"在两种表示下都覆盖:
+# 落不到实际角度范围的区间不匹配任何点, 无害。装臂后用
+# `ros2 topic echo /scan_raw --field angle_min` 实测表示法, 可删掉
+# 用不上的段。
+scan_mask:
+  ros__parameters:
+    filter1:
+      name: rear_mask_low
+      type: laser_filters/LaserScanAngularBoundsFilterInPlace
+      params:
+        lower_angle: 2.2416   # π - 0.9
+        upper_angle: 3.1416   # π
+    filter2:
+      name: rear_mask_high
+      type: laser_filters/LaserScanAngularBoundsFilterInPlace
+      params:
+        lower_angle: 3.1416   # π
+        upper_angle: 4.0416   # π + 0.9 (0..2π 表示)
+    filter3:
+      name: rear_mask_wrap
+      type: laser_filters/LaserScanAngularBoundsFilterInPlace
+      params:
+        lower_angle: -3.1416  # -π (−π..π 表示)
+        upper_angle: -2.2416  # -π + 0.9
