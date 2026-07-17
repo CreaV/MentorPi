@@ -41,6 +41,7 @@ Usage:
 
 import argparse
 import base64
+import io
 import json
 import math
 import re
@@ -109,6 +110,42 @@ def load_ply_points(path: Path):
         if rgb is not None:
             rgb = rgb[keep]
     return xyz, rgb
+
+
+# ---------- RGB-D backprojection (true-color live depth cloud) ----------
+
+def decode_jpeg_rgb(data: bytes) -> Optional[np.ndarray]:
+    """JPEG/PNG bytes -> HxWx3 uint8, or None if no decoder available."""
+    try:
+        from PIL import Image as PILImage
+    except ImportError:
+        return None
+    try:
+        return np.asarray(PILImage.open(io.BytesIO(data)).convert("RGB"))
+    except Exception:
+        return None
+
+
+def backproject_depth(depth_mm: np.ndarray, K: np.ndarray,
+                      rgb: Optional[np.ndarray], stride: int,
+                      max_depth: float):
+    """16UC1 depth (mm, optical frame, aligned 1:1 with rgb) -> (Nx3 points
+    in the optical frame, Nx3 uint8 colors or None). Gemini 2L publishes
+    HW-aligned depth with the color K and color frame, so pixel (u,v) in
+    depth IS pixel (u,v) in rgb — no remapping needed."""
+    h, w = depth_mm.shape
+    d = depth_mm[::stride, ::stride].astype(np.float32) / 1000.0
+    uu, vv = np.meshgrid(np.arange(0, w, stride, dtype=np.float32),
+                         np.arange(0, h, stride, dtype=np.float32))
+    valid = (d > 0.1) & (d < max_depth)
+    z = d[valid]
+    x = (uu[valid] - K[0, 2]) * z / K[0, 0]
+    y = (vv[valid] - K[1, 2]) * z / K[1, 1]
+    pts = np.stack([x, y, z], axis=1)
+    colors = None
+    if rgb is not None and rgb.shape[:2] == depth_mm.shape:
+        colors = rgb[::stride, ::stride][valid]
+    return pts, colors
 
 
 # ---------- TF tree ----------
@@ -352,6 +389,12 @@ class FoxgloveClient:
             return {"header": self._header(msg.header),
                     "k": [float(v) for v in msg.k],
                     "width": int(msg.width), "height": int(msg.height)}
+        if typename == "sensor_msgs/msg/Image":
+            return {"header": self._header(msg.header),
+                    "height": int(msg.height), "width": int(msg.width),
+                    "encoding": msg.encoding,
+                    "is_bigendian": bool(msg.is_bigendian),
+                    "data": bytes(msg.data)}          # raw bytes, not base64
         return None
 
     def run_forever(self) -> None:
@@ -436,6 +479,13 @@ def main() -> int:
     ap.add_argument("--cloud", type=Path, default=None,
                     help="rtabmap exported cloud .ply (map frame)")
     ap.add_argument("--point-radius", type=float, default=0.008)
+    ap.add_argument("--depth-cloud", action="store_true",
+                    help="live true-color RGB-D point cloud (backprojects "
+                         "/viewer/depth_raw 2Hz + latest RGB, ~2ms/frame)")
+    ap.add_argument("--depth-stride", type=int, default=2,
+                    help="depth pixel subsampling (2 -> 320x240 = 76k pts)")
+    ap.add_argument("--depth-max", type=float, default=4.0,
+                    help="discard depth beyond this range (m)")
     ap.add_argument("--image-hz", type=float, default=4.0,
                     help="max live camera image decode rate (client-side)")
     ap.add_argument("--image-topic", default="/viewer/color_compressed",
@@ -452,13 +502,16 @@ def main() -> int:
         # 每个新连上的 viewer 都要从头回灌几分钟的旧数据才追上实时,
         # 看起来就是"巨额延迟 + 在播过去"。64MB 只保留最近几十秒。
         try:
-            server_uri = rr.serve_grpc(server_memory_limit="64MB")
-        except TypeError:
-            server_uri = rr.serve_grpc()
-        try:
+            try:
+                server_uri = rr.serve_grpc(server_memory_limit="64MB")
+            except TypeError:
+                server_uri = rr.serve_grpc()
             rr.serve_web_viewer(connect_to=server_uri)
-        except AttributeError:
-            rr.serve_web()  # rerun < 0.24 API
+        except AttributeError:  # rerun < 0.24: no serve_grpc/serve_web_viewer
+            try:
+                rr.serve_web(open_browser=False, server_memory_limit="64MB")
+            except TypeError:
+                rr.serve_web()
         print("\nopen the printed URL on your phone/PC (same LAN)\n")
     else:
         rr.spawn()
@@ -510,12 +563,16 @@ def main() -> int:
                                rr.LineStrips3D([np.asarray(trajectory, dtype=np.float32)],
                                                colors=[40, 200, 255], radii=0.008))
 
+    cam_k: dict[str, np.ndarray] = {}       # frame -> 3x3 K
+    latest_jpeg: list[Optional[bytes]] = [None]   # newest RGB, decoded lazily
+
     def on_camera_info(msg):
         frame = msg["header"]["frame_id"].lstrip("/")
         path = tree.path(frame)
         if path is None:
             return
         K = np.array(msg["k"], dtype=np.float64).reshape(3, 3)
+        cam_k[frame] = K
         rr.log(path, rr.Pinhole(
             image_from_camera=K,
             resolution=[int(msg["width"]), int(msg["height"])],
@@ -533,8 +590,49 @@ def main() -> int:
         data = msg["data"]
         # foxglove path hands us raw bytes; rosbridge JSON hands base64 str.
         jpeg = data if isinstance(data, (bytes, bytearray)) else base64.b64decode(data)
+        latest_jpeg[0] = jpeg
         fmt = "image/png" if "png" in msg.get("format", "") else "image/jpeg"
         rr.log(path + "/image", rr.EncodedImage(contents=jpeg, media_type=fmt))
+
+    depth_warned: list[bool] = [False]
+    depth_started: list[bool] = [False]
+
+    def on_depth(msg):
+        # 真彩 RGB-D 反投影: /viewer/depth_raw (2Hz lazy 节流) + 最近一帧
+        # RGB。深度已 HW 对齐到 color (同 K 同 frame),像素 1:1 取色。点在
+        # 客户端转到 map 系后记录在固定实体 —— 避开 Pinhole 子实体的 2D
+        # 语义,也不依赖 viewer 端 transform 时序。
+        frame = msg["header"]["frame_id"].lstrip("/")
+        K = cam_k.get(frame)
+        if K is None:
+            return                       # camera_info not seen yet
+        if msg.get("encoding") != "16UC1":
+            if not depth_warned[0]:
+                depth_warned[0] = True
+                print(f"depth cloud: unsupported encoding {msg.get('encoding')}")
+            return
+        data = msg["data"]
+        raw = data if isinstance(data, (bytes, bytearray)) else base64.b64decode(data)
+        h, w = int(msg["height"]), int(msg["width"])
+        dt = ">u2" if msg.get("is_bigendian") else "<u2"
+        depth_mm = np.frombuffer(raw, dtype=dt).reshape(h, w)
+        rgb = decode_jpeg_rgb(latest_jpeg[0]) if latest_jpeg[0] else None
+        pts, colors = backproject_depth(depth_mm, K, rgb,
+                                        args.depth_stride, args.depth_max)
+        if not len(pts):
+            return
+        M = tree.map_from(frame)
+        if M is None:
+            return
+        pts = pts @ M[:3, :3].T + M[:3, 3]
+        stamp = msg["header"]["stamp"]
+        set_ros_time(stamp["sec"] + stamp["nanosec"] * 1e-9)
+        rr.log(f"{MAP}/depth_cloud",
+               rr.Points3D(pts.astype(np.float32), colors=colors, radii=0.006))
+        if not depth_started[0]:
+            depth_started[0] = True
+            print(f"depth cloud active: {len(pts):,} pts/frame "
+                  f"({'true color' if colors is not None else 'no RGB yet'})")
 
     image_period = 1.0 / max(args.image_hz, 0.1)
 
@@ -548,6 +646,8 @@ def main() -> int:
         fox.subscribe("/camera/color/camera_info", on_camera_info, min_period=2.0)
         fox.subscribe(args.image_topic, on_compressed_image,
                       min_period=image_period)
+        if args.depth_cloud:
+            fox.subscribe("/viewer/depth_raw", on_depth, min_period=0.45)
         fox.on_ready(lambda: print(f"connected to ws://{args.robot}:{port} (foxglove)"))
         print("connecting ... (Ctrl-C to quit)")
         try:
@@ -573,6 +673,10 @@ def main() -> int:
                    "sensor_msgs/msg/CompressedImage",
                    throttle_rate=int(1000 * image_period),
                    queue_length=1).subscribe(on_compressed_image)
+    if args.depth_cloud:
+        roslibpy.Topic(ros, "/viewer/depth_raw", "sensor_msgs/msg/Image",
+                       throttle_rate=450,
+                       queue_length=1).subscribe(on_depth)
 
     ros.on_ready(lambda: print(f"connected to ws://{args.robot}:{port} (rosbridge)"))
     print("connecting ... (Ctrl-C to quit)")
