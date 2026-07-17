@@ -92,14 +92,14 @@
       loc_3d 模式 SIGINT 宽限 ≥30s，且 rtabmap 永不 SIGKILL（超时只告警）。
 - [x] `accel_limit_linear/angular`（已实现,默认 1.5 / 10.0）
       实车调参：手柄阶跃指令下对比 `/odom` 与实际位移，斜坡太缓/太陡都改。
-- [ ] **开机时钟跳变防护（2026-07-17 实战踩坑）**：Pi 无 RTC,fake-hwclock
-      用昨天的时间启动 ROS,随后 NTP 把时钟**运行中前跳 ~22h** → EKF 幻觉
-      (量到反向旋转)、全部话题静默、相机 pipeline 反复死、action 结果丢失。
-      指纹:journalctl 里服务启动时间是"昨天"而 uptime 只有几分钟。
-      临时解:时钟稳定后 restart 服务即愈。长期方案待定夺——unit 加
-      `After=time-sync.target` + systemd-time-wait-sync 最干净,但**无外网
-      时服务永远不启动**(机器人可能离线跑);备选:supervisor 检测大幅
-      clock jump 后自动重启各节点,或 Pi 加 RTC 电池模块。
+- [x] **开机时钟跳变防护（2026-07-17 踩坑并当日修复,commit 657dd85）**：
+      Pi 无 RTC 电池,fake-hwclock 用旧时间启动 ROS,NTP 随后**运行中跳
+      ~22h** → EKF 幻觉、话题集体静默、相机 pipeline 反复死。两层修复:
+      ① `mentorpi-remote` 启动前有界等待 NTP 同步(60s 上限,离线照常启动);
+      ② 新 `mentorpi-clockguard.service`(clock-jump-guard.sh,REALTIME vs
+      BOOTTIME 增量差 >10s 即 try-restart 栈)。实测 ±30s 双向跳变均触发
+      自动恢复。install-systemd.sh 一并安装。**硬件根治可选**:Pi 5 自带
+      RTC(/dev/rtc0 已确认),买官方 RTC 电池插 J5 即免疫,软件层变双保险。
 - [ ] 地图保存进 supervisor/web UI（目前 2D 靠手动调 serialize_map 服务，
       手机端没有入口）。
 - [ ] Foxglove layout（`mentorpi.json`）补 loc_3d 模式按钮（web SPA 已有）。
