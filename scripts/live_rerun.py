@@ -42,6 +42,8 @@ Usage:
 import argparse
 import base64
 import json
+import math
+import re
 import struct
 import sys
 import threading
@@ -53,6 +55,28 @@ import numpy as np
 import rerun as rr
 
 MAP = "map"  # rerun root entity == ROS map frame
+
+# rerun >= 0.23 unified the time API into rr.set_time(); older SDKs
+# (e.g. 0.22) only have set_time_seconds. Pick once at import.
+if hasattr(rr, "set_time"):
+    def set_ros_time(seconds: float) -> None:
+        rr.set_time("ros_time", timestamp=seconds)
+else:  # rerun < 0.23
+    def set_ros_time(seconds: float) -> None:
+        rr.set_time_seconds("ros_time", seconds)
+
+
+def quat_from_rpy(r: float, p: float, y: float) -> np.ndarray:
+    """ROS fixed-axis RPY -> xyzw quaternion."""
+    cr, sr = math.cos(r / 2), math.sin(r / 2)
+    cp, sp = math.cos(p / 2), math.sin(p / 2)
+    cy, sy = math.cos(y / 2), math.sin(y / 2)
+    return np.array([
+        sr * cp * cy - cr * sp * sy,
+        cr * sp * cy + sr * cp * sy,
+        cr * cp * sy - sr * sp * cy,
+        cr * cp * cy + sr * sp * sy,
+    ])
 
 
 # ---------- ply loading (normal colored ply OR 3DGS ply) ----------
@@ -90,14 +114,16 @@ def load_ply_points(path: Path):
 # ---------- TF tree ----------
 
 class TfTree:
-    """Keeps latest transform per edge and mirrors the chain into Rerun.
+    """Keeps latest transform per edge and mirrors frames into Rerun.
 
-    Rerun entity paths are built from the TF parent chain (map/odom/base_link/
-    ...). TF messages can arrive before their parent links are known (the
-    orbbec driver publishes deep optical frames before camera_link), which
-    would pin entities to wrong paths — so whenever the topology changes we
-    re-log every known edge at its recomputed path. The tree is ~10 frames,
-    this is cheap.
+    Every TF frame lives at a STABLE entity path `map/<frame>` carrying its
+    composed map<-frame ABSOLUTE pose. An earlier design nested paths along
+    the TF chain (map/odom/base_link/...); when the topology filled in
+    (rtabmap's map->odom appearing after startup) entities MOVED to new
+    paths, stranding statically-logged Pinholes/images at the old ones —
+    the "frozen extra frustum + duplicate RGB panel" bug. Flat paths never
+    move, so nothing can go stale. On each edge update we re-log the frame
+    and all its TF descendants (~10 frames, cheap).
     """
 
     def __init__(self) -> None:
@@ -106,72 +132,135 @@ class TfTree:
         self.xform: dict[str, tuple[np.ndarray, np.ndarray, bool]] = {}
         self.lock = threading.Lock()
 
-    def _path_locked(self, frame: str) -> Optional[str]:
-        chain, seen = [], set()
-        cur: Optional[str] = frame
-        while cur is not None:
-            if cur in seen:
-                return None  # cycle
-            seen.add(cur)
-            chain.append(cur)
-            cur = self.parent_of.get(cur)
-        if chain[-1] != MAP:
-            # Not yet connected to map (e.g. no rtabmap map->odom): hang the
-            # orphan chain under map anyway so the robot is still visible.
-            chain.append(MAP)
-        chain.reverse()
-        return "/".join(chain)
-
-    def path(self, frame: str) -> Optional[str]:
-        with self.lock:
-            return self._path_locked(frame)
-
     @staticmethod
-    def _log_edge(path: str, t: np.ndarray, q: np.ndarray, static: bool) -> None:
-        rr.log(path, rr.Transform3D(translation=t, rotation=rr.Quaternion(xyzw=q)),
-               static=static)
+    def path(frame: str) -> str:
+        """Stable entity path for a TF frame (never changes, never None)."""
+        return MAP if frame == MAP else f"{MAP}/{frame}"
 
     def update(self, child: str, parent: str, t: np.ndarray, q: np.ndarray,
                *, static: bool, stamp: float) -> None:
         to_log: list[tuple[str, np.ndarray, np.ndarray, bool]] = []
         with self.lock:
-            topology_changed = self.parent_of.get(child) != parent
             self.parent_of[child] = parent
             self.xform[child] = (t, q, static)
-            if topology_changed:
-                # Re-log everything at (possibly) new paths.
-                for c, (ct, cq, cs) in self.xform.items():
-                    p = self._path_locked(c)
-                    if p is not None:
-                        to_log.append((p, ct, cq, cs))
-            else:
-                p = self._path_locked(child)
-                if p is not None:
-                    to_log.append((p, t, q, static))
+            # The absolute pose of `child` AND every frame hanging under it
+            # changed; recompute and re-log them all.
+            affected = [child]
+            i = 0
+            while i < len(affected):
+                cur = affected[i]
+                i += 1
+                affected.extend(c for c, p in self.parent_of.items() if p == cur)
+            for f in affected:
+                M = self._map_from_locked(f)
+                if M is None:
+                    continue
+                # Absolute poses are always temporal: even a /tf_static edge
+                # (base_link->camera_link) moves in the map frame whenever an
+                # ancestor moves.
+                to_log.append((self.path(f), M[:3, 3].copy(),
+                               rot_to_quat(M[:3, :3]), False))
         if not static:
-            rr.set_time("ros_time", timestamp=stamp)
-        for p, ct, cq, cs in to_log:
-            self._log_edge(p, ct, cq, cs)
+            set_ros_time(stamp)
+        for p, ct, cq, _cs in to_log:
+            rr.log(p, rr.Transform3D(translation=ct,
+                                     rotation=rr.Quaternion(xyzw=cq)))
+
+    def _map_from_locked(self, frame: str) -> Optional[np.ndarray]:
+        M = np.eye(4)
+        cur = frame
+        seen = set()
+        while cur != MAP:
+            if cur in seen:
+                return None  # cycle
+            seen.add(cur)
+            edge = self.xform.get(cur)
+            parent = self.parent_of.get(cur)
+            if edge is None or parent is None:
+                break  # orphan root == map origin
+            t, q, _ = edge
+            E = np.eye(4)
+            E[:3, :3] = quat_to_rot(q)
+            E[:3, 3] = t
+            M = E @ M
+            cur = parent
+        return M
 
     def map_from(self, frame: str) -> Optional[np.ndarray]:
         """Compose map<-frame as a 4x4 by walking stored edges. An orphan
         chain root is treated as sitting at the map origin (consistent with
         the entity paths above)."""
         with self.lock:
-            M = np.eye(4)
-            cur = frame
-            while cur != MAP:
-                edge = self.xform.get(cur)
-                parent = self.parent_of.get(cur)
-                if edge is None or parent is None:
-                    break  # orphan root == map origin
-                t, q, _ = edge
-                E = np.eye(4)
-                E[:3, :3] = quat_to_rot(q)
-                E[:3, 3] = t
-                M = E @ M
-                cur = parent
-            return M
+            return self._map_from_locked(frame)
+
+
+class RobotModel:
+    """Visual robot model: STL meshes hung under the base_link entity.
+
+    Geometry (calibrated wheel offsets, laser/camera joint origins) is
+    parsed straight out of mecanum.xacro so the viewer stays in sync with
+    calibration write-backs — no hardcoded copies. Entity paths are stable
+    (map/base_link), so ensure() logs the meshes once and no-ops after;
+    the move-handling branch is kept as a safety net. Fail-soft: if the
+    repo layout / meshes are missing, the viewer still works, just without
+    the robot body.
+    """
+
+    def __init__(self) -> None:
+        self.base_path: Optional[str] = None
+        try:
+            self.parts = self._load()
+        except Exception as e:  # missing xacro/meshes: degrade gracefully
+            print(f"robot model unavailable ({e}); showing axes only")
+            self.parts = []
+
+    @staticmethod
+    def _load():
+        root = Path(__file__).resolve().parent.parent
+        xacro = (root / "src/mentorpi_description/urdf/mecanum.xacro").read_text()
+        mesh_dir = root / "src/mentorpi_description/meshes/mecanum"
+
+        def prop(name: str) -> float:
+            m = re.search(
+                rf'<xacro:property name="{name}"\s+value="([-0-9.]+)"', xacro)
+            return float(m.group(1))
+
+        def joint_origin(name: str):
+            m = re.search(
+                rf'<joint name="{name}".*?<origin xyz="([^"]+)" rpy="([^"]+)"',
+                xacro, re.S)
+            return ([float(v) for v in m.group(1).split()],
+                    [float(v) for v in m.group(2).split()])
+
+        x_off = prop("wheelbase") / 2
+        y_off = prop("track_width") / 2
+        wheel_z = prop("wheel_z")
+        parts = [("base", mesh_dir / "base_link.STL", [0, 0, 0], [0, 0, 0])]
+        for pfx, sx, sy in (("lf", 1, 1), ("rf", 1, -1),
+                            ("lb", -1, 1), ("rb", -1, -1)):
+            parts.append((f"wheel_{pfx}", mesh_dir / f"wheel_{pfx}_Link.STL",
+                          [sx * x_off, sy * y_off, wheel_z], [0, 0, 0]))
+        for part, joint, mesh in (("laser", "laser_joint", "lidar_Link.STL"),
+                                  ("camera", "camera_joint", "cam_Link.STL")):
+            xyz, rpy = joint_origin(joint)
+            parts.append((part, mesh_dir / mesh, xyz, rpy))
+        for _, mesh, _, _ in parts:
+            if not mesh.is_file():
+                raise FileNotFoundError(mesh)
+        return parts
+
+    def ensure(self, base_path: Optional[str]) -> None:
+        if not self.parts or base_path is None or base_path == self.base_path:
+            return
+        if self.base_path is not None:
+            rr.log(self.base_path + "/model", rr.Clear(recursive=True))
+        self.base_path = base_path
+        for name, mesh, xyz, rpy in self.parts:
+            p = f"{base_path}/model/{name}"
+            rr.log(p, rr.Transform3D(
+                translation=xyz,
+                rotation=rr.Quaternion(xyzw=quat_from_rpy(*rpy))), static=True)
+            rr.log(p, rr.Asset3D(path=str(mesh)), static=True)
 
 
 def quat_to_rot(q):
@@ -183,6 +272,26 @@ def quat_to_rot(q):
         [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
         [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
     ])
+
+
+def rot_to_quat(R) -> np.ndarray:
+    """Rotation matrix -> xyzw quaternion (Shepperd's method)."""
+    t = float(np.trace(R))
+    if t > 0:
+        s = math.sqrt(t + 1.0) * 2
+        return np.array([(R[2, 1] - R[1, 2]) / s, (R[0, 2] - R[2, 0]) / s,
+                         (R[1, 0] - R[0, 1]) / s, 0.25 * s])
+    if R[0, 0] > R[1, 1] and R[0, 0] > R[2, 2]:
+        s = math.sqrt(1.0 + R[0, 0] - R[1, 1] - R[2, 2]) * 2
+        return np.array([0.25 * s, (R[0, 1] + R[1, 0]) / s,
+                         (R[0, 2] + R[2, 0]) / s, (R[2, 1] - R[1, 2]) / s])
+    if R[1, 1] > R[2, 2]:
+        s = math.sqrt(1.0 + R[1, 1] - R[0, 0] - R[2, 2]) * 2
+        return np.array([(R[0, 1] + R[1, 0]) / s, 0.25 * s,
+                         (R[1, 2] + R[2, 1]) / s, (R[0, 2] - R[2, 0]) / s])
+    s = math.sqrt(1.0 + R[2, 2] - R[0, 0] - R[1, 1]) * 2
+    return np.array([(R[0, 2] + R[2, 0]) / s, (R[1, 2] + R[2, 1]) / s,
+                     0.25 * s, (R[1, 0] - R[0, 1]) / s])
 
 
 # ---------- foxglove websocket transport (binary CDR, decode client-side) ----------
@@ -367,6 +476,7 @@ def main() -> int:
         rr.log(entity, rr.Points3D(xyz, colors=rgb, radii=radius), static=True)
 
     tree = TfTree()
+    robot = RobotModel()
     trajectory: list[list[float]] = []
     last_traj_log = [0.0]
 
@@ -386,6 +496,7 @@ def main() -> int:
             )
             # Grow trajectory from map->base_link whenever odom pose moves.
             if child == "base_link" and not static:
+                robot.ensure(tree.path("base_link"))
                 M = tree.map_from("base_link")
                 if M is not None:
                     p = M[:3, 3]
@@ -418,7 +529,7 @@ def main() -> int:
         if path is None:
             return
         stamp = msg["header"]["stamp"]
-        rr.set_time("ros_time", timestamp=stamp["sec"] + stamp["nanosec"] * 1e-9)
+        set_ros_time(stamp["sec"] + stamp["nanosec"] * 1e-9)
         data = msg["data"]
         # foxglove path hands us raw bytes; rosbridge JSON hands base64 str.
         jpeg = data if isinstance(data, (bytes, bytearray)) else base64.b64decode(data)
