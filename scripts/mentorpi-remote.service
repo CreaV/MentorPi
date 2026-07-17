@@ -32,6 +32,15 @@ Environment=PATH=/usr/bin:/usr/local/bin:/opt/ros/jazzy/bin
 # is missing.
 ExecStartPre=-+/usr/sbin/iw dev wlan0 set power_save off
 
+# Bounded wait for NTP sync. The Pi has no RTC battery: fake-hwclock boots
+# on the time saved at last shutdown, and if ROS starts before NTP fixes
+# it, the later clock step (observed +22h, 2026-07-17) silently breaks
+# EKF/TF/DDS across the whole stack. 60 s cap keeps fully-offline boots
+# possible; a step that arrives later is caught by mentorpi-clockguard,
+# which restarts this unit.
+ExecStartPre=-/bin/bash -c 'for i in $(seq 60); do [ "$(timedatectl show -p NTPSynchronized --value)" = "yes" ] && exit 0; sleep 1; done; echo "NTP not synced after 60s; starting on current clock (clockguard will catch a late step)"'
+TimeoutStartSec=180
+
 # Use non-login non-interactive bash to avoid sourcing ~/.bashrc (which on this
 # box auto-activates miniforge and breaks rclpy imports).
 ExecStart=/bin/bash -c 'source /opt/ros/jazzy/setup.bash && source install/setup.bash && exec ros2 launch mentorpi_supervisor remote.launch.py'
