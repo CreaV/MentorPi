@@ -12,6 +12,7 @@ Open with an ABSOLUTE file= query so sibling mesh resolution works:
 
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
 
@@ -31,4 +32,8 @@ def gen_urdf() -> str:
         capture_output=True,
         text=True,
     )
-    return result.stdout.replace("package://mentorpi_description/", "../")
+    urdf = result.stdout.replace("package://mentorpi_description/", "../")
+    # Preview-only speedup: drop collision blocks. Visual+collision reference
+    # the same ~60 MB of STLs; skipping collisions halves browser-side
+    # parsing. Physics/planning consumers must use mentorpi_so101.urdf.
+    return re.sub(r"[ \t]*<collision>.*?</collision>\n?", "", urdf, flags=re.DOTALL)

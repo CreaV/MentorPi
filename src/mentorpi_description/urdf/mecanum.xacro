@@ -194,6 +194,13 @@
     <xacro:lidar_post x="-0.0509" y="-0.0244"/>
     <xacro:lidar_post x="-0.0309" y=" 0.0244"/>
     <xacro:lidar_post x="-0.0309" y="-0.0244"/>
+    <!-- 相机云台底座(纯外观): 顶板(0.0575)到相机机身底(~0.077)之间的
+         2-DOF 云台舵机组,同样不在任何厂商网格里。 -->
+    <visual>
+      <origin xyz="0.093 0 0.0675" rpy="0 0 0"/>
+      <geometry><box size="0.030 0.040 0.020"/></geometry>
+      <material name="black"/>
+    </visual>
   </link>
   <joint name="lidar_mount_visual_joint" type="fixed">
     <parent link="base_link"/>
