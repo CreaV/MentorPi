@@ -259,12 +259,14 @@
       </geometry>
       <material name="black"/>
     </visual>
-    <!-- 相机云台底座(纯外观): 顶板(0.0575)到相机机身底(~0.077)之间的
-         2-DOF 云台舵机组,同样不在任何厂商网格里。 -->
+    <!-- 相机云台舵机塔(纯外观): 网格切片实测底盘鼻部是台阶状——顶板
+         (z=0.0575)只到 x≈+0.017,前方是 z≈0.0253 的中层甲板(到 x≈0.08)。
+         2-DOF 云台从中层甲板(0.0253)撑到相机机身底(0.0772),高 52mm,
+         不在任何厂商网格里。 -->
     <visual>
-      <origin rpy="0 0 0" xyz="0.093 0 0.0675"/>
+      <origin rpy="0 0 0" xyz="0.088 0 0.0513"/>
       <geometry>
-        <box size="0.030 0.040 0.020"/>
+        <box size="0.028 0.040 0.052"/>
       </geometry>
       <material name="black"/>
     </visual>
@@ -696,7 +698,8 @@
   </joint>
   <!-- 臂供电 2S 锂电: 前挂托架 (mechanical/printable/battery_tray_2s.py),
          兼作前配重抗后倾。包络暂按 2S2200 (105x33x24) —— 购得实物后改
-         PACK_* 重出。托架背面贴底盘前脸 (x=0.109), 挂唇压顶缘。 -->
+         PACK_* 重出。挂线(网格切片实测,P0 卡尺复核): 底盘鼻部无垂直
+         前脸——托架背面贴中层甲板前缘 x=0.080, 挂唇压其顶面 z=0.0253。 -->
   <link name="battery_tray_link">
     <inertial>
       <origin rpy="0 0 0" xyz="0 0 0.010"/>
@@ -722,7 +725,9 @@
   <joint name="battery_tray_joint" type="fixed">
     <parent link="base_link"/>
     <child link="battery_tray_link"/>
-    <origin rpy="0 0 0" xyz="0.1293 0 0.0305"/>
+    <!-- 背面 x = 0.080 - outer_x/2 + outer_x = 0.0203+0.080; 挂唇底
+           z = -0.0017 + 0.027 = 0.0253 (中层甲板顶面)。 -->
+    <origin rpy="0 0 0" xyz="0.1003 0 -0.0017"/>
   </joint>
   <link name="battery_2s_link">
     <inertial>

@@ -8,12 +8,16 @@ acts as the front counterweight against the rear-mounted arm.
 - Units: mm; origin: tray footprint center, bottom face at Z=0.
 - Pack envelope is PROVISIONAL (typical 2S 2200 mAh: 105 x 33 x 24 mm).
   Update PACK_* after the actual pack is purchased and re-generate.
-- Twin L-hooks wrap the chassis front top edge: the tray back face rests on
-  the chassis front face, the lip crosses the wall top, and a short outer
-  drop-tab plus a horizontal M4 clamp screw closes the hook. HOOK_THROAT
-  must swallow the front-wall thickness — STL-only guess, caliper-check
-  before printing. Two straps are mandatory; the -Y end stop is low, the
-  +Y end stays open for the XT60 lead.
+- Hang line (mesh-sliced 2026-07-18, caliper-check in P0): the chassis nose
+  is STEPPED — the 57.5 mm top plate ends at x=+17, a mid deck at z=25.3 mm
+  runs to x=+80, and only a low bumper reaches the true front. There is no
+  vertical front face. The twin L-hooks therefore wrap the MID-DECK FRONT
+  EDGE (x=0.080, top z=0.0253 in base_link): tray back face against the
+  deck edge, lip on the deck top, drop-tab + horizontal M4 clamp screw
+  closing the hook. HOOK_THROAT must swallow the mid-deck plate thickness
+  (mesh suggests ~2-3 mm sheet; 6 mm throat + clamp screw covers it).
+  Two straps are mandatory; the -Y end stop is low, the +Y end stays open
+  for the XT60 lead.
 """
 
 from build123d import Align, Box, Cylinder, Location
