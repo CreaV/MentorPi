@@ -16,3 +16,6 @@ gs_work/
 IMG_*.jpg
 # CAD viewer cache artifacts (hidden .step.glb derivatives)
 .*.step.glb
+
+# CAD viewer package:// resolution shim (root-relative package path)
+/mentorpi_description
