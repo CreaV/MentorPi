@@ -157,7 +157,7 @@
          confirms z-up, no axis flip. Refine RPY in Part 2 if board is skewed. -->
     <origin rpy="0 0 0" xyz="-0.054 0 0.05"/>
   </joint>
-  <!-- ===== Camera (AprilTag hand-eye calibrated 2026-07-12) ===== -->
+  <!-- ===== Camera (external transform pending recalibration) ===== -->
   <link name="camera_link">
     <inertial>
       <origin rpy="0 0 0" xyz="0.0023 0.0011 -0.0102"/>
@@ -167,7 +167,8 @@
     <!-- 视觉修正(纯外观): cam_Link.STL 以机身顶面中心为原点建模,而
          camera_link 是标定出的光学中心——彩色镜头偏离机身中心 ~3cm(y),
          位于前脸(x)、中高(z)。不加偏移时机身网格会整体跟着光学系平移,
-         看起来"装歪"。标定值本身经地面点云验证,勿动 camera_joint。 -->
+         看起来"装歪"。此机身内参式偏移仍有效；但云台已拆除，下面的
+         camera_joint 是旧安装方式的历史值，最终固定后必须重标。 -->
     <visual>
       <origin rpy="0 0 0" xyz="-0.0137 -0.0305 0.013"/>
       <geometry>
@@ -185,7 +186,8 @@
   <joint name="camera_joint" type="fixed">
     <parent link="base_link"/>
     <child link="camera_link"/>
-    <!-- AprilTag hand-eye calibration, 2026-07-17; z is ruler-fixed. -->
+    <!-- STALE: AprilTag hand-eye calibration from the removed 2-DOF gimbal,
+         2026-07-17. Keep only as provenance until the direct mount is final. -->
     <origin rpy="-0.0164 -0.1302 0.0147" xyz="0.1114 0.0305 0.0950"/>
   </joint>
   <link name="camera_color_optical_frame"/>
@@ -224,57 +226,11 @@
   <joint name="laser_joint" type="fixed">
     <parent link="base_link"/>
     <child link="laser_frame"/>
-    <!-- x: ruler-measured 1.4cm behind base center; y: laterally centered;
-         z: measured. RPY (mounting yaw) still to be refined via wall line-fit.
-         装臂(with_so101)不改变雷达高度——臂占据的后向扇区由 laser_filters
-         角度掩膜滤除(见 base.launch.py),现有 2D/3D 地图资产保持有效。 -->
-    <origin rpy="0 0 0" xyz="-0.014 0 0.18"/>
-  </joint>
-  <link name="lidar_mount_visual_link">
-    <visual>
-      <origin rpy="0 0 0" xyz="-0.0509 0.0244 0.10125"/>
-      <geometry>
-        <cylinder length="0.0875" radius="0.004"/>
-      </geometry>
-      <material name="black"/>
-    </visual>
-    <visual>
-      <origin rpy="0 0 0" xyz="-0.0509 -0.0244 0.10125"/>
-      <geometry>
-        <cylinder length="0.0875" radius="0.004"/>
-      </geometry>
-      <material name="black"/>
-    </visual>
-    <visual>
-      <origin rpy="0 0 0" xyz="-0.0309 0.0244 0.10125"/>
-      <geometry>
-        <cylinder length="0.0875" radius="0.004"/>
-      </geometry>
-      <material name="black"/>
-    </visual>
-    <visual>
-      <origin rpy="0 0 0" xyz="-0.0309 -0.0244 0.10125"/>
-      <geometry>
-        <cylinder length="0.0875" radius="0.004"/>
-      </geometry>
-      <material name="black"/>
-    </visual>
-    <!-- 相机云台舵机塔(纯外观): 网格切片实测底盘鼻部是台阶状——顶板
-         (z=0.0575)只到 x≈+0.017,前方是 z≈0.0253 的中层甲板(到 x≈0.08)。
-         2-DOF 云台从中层甲板(0.0253)撑到相机机身底(0.0772),高 52mm,
-         不在任何厂商网格里。 -->
-    <visual>
-      <origin rpy="0 0 0" xyz="0.088 0 0.0513"/>
-      <geometry>
-        <box size="0.028 0.040 0.052"/>
-      </geometry>
-      <material name="black"/>
-    </visual>
-  </link>
-  <joint name="lidar_mount_visual_joint" type="fixed">
-    <parent link="base_link"/>
-    <child link="lidar_mount_visual_link"/>
-    <origin rpy="0 0 0" xyz="0 0 0"/>
+    <!-- Recovered vendor-CAD transform from mecanum.pre_calibration.xacro.
+         base_link is 50.5 mm above ground; lidar_Link.STL spans z=-35..0 mm.
+         This places both the chassis top and lidar bottom at 108.001 mm and
+         laser_frame at 143.001 mm above ground: direct mount, no tower. -->
+    <origin rpy="0 0 0" xyz="-0.012242 0 0.092501"/>
   </joint>
   <joint name="so101_mount_joint" type="fixed">
     <parent link="base_link"/>
@@ -668,15 +624,15 @@
     </actuator>
   </transmission>
   <!-- 悬伸甲板 (mechanical/printable/so101_deck_plate.py):
-         x -0.195..-0.015, y ±0.048, 顶面 z=0.0655, 底面纵肋 15 深 -->
+         x -0.195..-0.050, y ±0.048, 顶面 z=0.0655, 底面纵肋 15 深 -->
   <link name="so101_deck_link">
     <inertial>
-      <origin rpy="0 0 0" xyz="-0.105 0 -0.004"/>
-      <mass value="0.19"/>
-      <inertia ixx="0.000147" ixy="0" ixz="0" iyy="0.000515" iyz="0" izz="0.000659"/>
+      <origin rpy="0 0 0" xyz="-0.1225 0 -0.004"/>
+      <mass value="0.16"/>
+      <inertia ixx="0.000124" ixy="0" ixz="0" iyy="0.000281" iyz="0" izz="0.000403"/>
     </inertial>
     <visual>
-      <origin rpy="0 0 0" xyz="-0.105 0 -0.008"/>
+      <origin rpy="0 0 0" xyz="-0.1225 0 -0.008"/>
       <geometry>
         <mesh filename="package://mentorpi_description/meshes/accessories/so101_deck_plate.stl" scale="0.001 0.001 0.001"/>
       </geometry>
@@ -685,9 +641,9 @@
       </material>
     </visual>
     <collision>
-      <origin rpy="0 0 0" xyz="-0.105 0 -0.004"/>
+      <origin rpy="0 0 0" xyz="-0.1225 0 -0.004"/>
       <geometry>
-        <box size="0.180 0.096 0.008"/>
+        <box size="0.145 0.096 0.008"/>
       </geometry>
     </collision>
   </link>

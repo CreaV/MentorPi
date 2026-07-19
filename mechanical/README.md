@@ -1,3 +1,31 @@
+# MentorPi + LeRobot SO-101 mounting kit — layout v3
+
+Layout v3 (2026-07-19) is the current mechanical source of truth. It closes
+the lidar/chassis P0 audit left open by layout v2:
+
+- The arm remains forward-facing at chassis `x=-0.155`. Real-mesh ±110°
+  shoulder-pan analysis gives 36.2 mm worst clearance to the lidar head.
+- The MS200 is directly mounted. The recovered pre-calibration xacro and STL
+  place `laser_frame` at `xyz=-0.012242 0 0.092501` in `base_link`, with the
+  scan plane 143.001 mm above ground. There is no lidar tower or riser.
+- The deck spans chassis x −195..−50 mm and y ±48 mm. It stops 10.95 mm ahead
+  of the lidar plan envelope and preserves the 92 mm rear cantilever.
+- The STL is the accepted measurement source for the rear four-hole row:
+  x=−61 mm, y=−24/−8/+8/+24 mm, nominal Ø4.3 mm, adjacent pitch 16 mm.
+  The user confirmed these are unthreaded through holes, unrelated to lidar
+  mounting. The printable deck uses Ø4.5 mm clearance for M4 screws + nuts;
+  the separate front two holes are unused.
+- The arm-enabled scan mask is geometry-derived ±24°. Regenerate with
+  `measurements/compute_scan_mask_so101.py` after geometry changes.
+
+Before printing, only physical-access details remain: confirm underside nut
+access and screw length by dry fit; measure the front tray hook throat and the
+purchased 2S pack. Leave the lidar untouched during deck installation.
+
+The layout v2 section below is retained only as superseded design history.
+
+---
+
 # MentorPi + LeRobot SO-101 mounting kit — layout v2
 
 This directory is the mechanical source of truth for the SO-101 on-vehicle

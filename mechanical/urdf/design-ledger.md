@@ -1,5 +1,31 @@
 # MentorPi + SO-101 URDF design ledger
 
+## Layout v3 (2026-07-19, current)
+
+- `base_link -> laser_frame` is restored from the recovered pre-calibration
+  xacro: `xyz=-0.012242 0 0.092501`, `rpy=0 0 0`. The base STL top and lidar
+  mesh bottom both resolve to 108.001 mm above ground; the scan plane is
+  143.001 mm above ground. The lidar is direct-mounted, with no tower links.
+- `base_link -> so101_base_link` remains fixed at
+  `xyz=-0.155 0 0.0655`, `rpy=0 0 0`. Full ±110° shoulder-pan clearance to
+  the real lidar-head mesh is 36.2 mm worst-case.
+- `so101_deck_plate` spans chassis x -0.195..-0.050, y ±0.048, top z=0.0655.
+  Its four chassis clearances are Ø4.5 at x=-0.061 and
+  y=-0.024/-0.008/+0.008/+0.024, matching the accepted STL measurements.
+  These holes are unthreaded, use M4 screws + nuts, and do not mount lidar.
+  Plate-to-lidar plan clearance is 10.95 mm; rear cantilever remains 92 mm.
+- The arm-enabled rear scan mask is ±24° (0.418879 rad), derived by intersecting
+  the actual chassis and SO-101 mesh triangles with the corrected scan plane.
+- The old `camera_joint` transform belonged to the removed gimbal and is stale.
+  Its mesh-intrinsic cosmetic offset remains valid, but the joint must be
+  recalibrated only after the final camera bracket is fixed.
+- Printed-mount inertials remain provisional estimates pending measured mass.
+
+The layout v2 and v1 sections below are retained only as superseded history.
+
+---
+
+
 ## Layout v2 (2026-07-18, supersedes the v1 entries below where they conflict)
 
 - Arm faces forward: `base_link -> so101_base_link` fixed at

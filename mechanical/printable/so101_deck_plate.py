@@ -1,17 +1,21 @@
-"""MentorPi SO-101 rear cantilever deck, layout v2 (arm forward, lidar stays).
+"""MentorPi SO-101 rear cantilever deck, layout v3 (arm forward, lidar stays).
 
 CAD brief:
 - Units: mm; XY is the deck plane; +Z is up.
 - Origin: plate footprint center, bottom mounting face at Z=0.
-  Chassis mapping: chassis_x = local_x - 105 (plate spans chassis -195..-15,
-  chassis rear edge at local +2, cantilever local -90..+2).
-- Chassis interface: four candidate 4.3 mm features inferred from the
-  repository base STL (Codex analysis, 20.1 x 48.7 mm pattern, chassis
-  x=-50.9/-30.9, y=+/-24.35). PHYSICAL CALIPER AUDIT PENDING (P0) — these
-  are parameters, not measurements. Assumed shim mode: the lidar tower
-  standoffs re-bolt through the same holes on top of this plate.
-- SO-101 interface: arm mount origin at local (-50, 0) = chassis x=-0.155,
-  chosen by real-mesh pan-sweep clearance vs lidar head + assumed posts
+  Chassis mapping: chassis_x = local_x - 122.5 (plate spans chassis
+  -195..-50, chassis rear edge at local +19.5, cantilever local
+  -72.5..+19.5).
+- Chassis interface: the rear row of four unthreaded through holes is measured
+  from the repository base STL and physically confirmed by the user. Nominal
+  chassis-frame centers are x=-61, y=-24/-8/+8/+24 with an STL diameter of
+  about 4.3 mm. Use M4 screws, washers and nuts; the printed clearance is
+  4.5 mm. The two front holes are intentionally unused because they lie in
+  the lidar zone.
+- Lidar avoidance: the plate front edge x=-50 is 10.95 mm behind the lidar
+  mesh rear bound x=-39.045; the plate neither shims nor touches the lidar.
+- SO-101 interface: arm mount origin at local (-32.5, 0) = chassis x=-0.155,
+  chosen by real-mesh pan-sweep clearance vs the lidar head
   (see mechanical/measurements/check_so101_clearances.py). Generic M4 grid
   plus two strap slots; two straps are a mandatory secondary restraint.
 - Cantilever stiffening: twin underside ribs + rear cross web; rib front
@@ -21,32 +25,36 @@ CAD brief:
 
 from build123d import Align, Box, Cylinder, Location
 
-PLATE_X = 180.0
+PLATE_X = 145.0
 PLATE_Y = 96.0
 PLATE_Z = 8.0
+CHASSIS_ORIGIN_X = -122.5
 
-# Chassis anchor holes, local coords (= chassis_mm + 105 in x).
+# Rear-row chassis anchors. Values are nominalized from the STL-measured
+# centers and the user-confirmed physical 2-front/4-rear through-hole layout.
 M4_CLEARANCE = 4.5
 COUNTERBORE_DIAMETER = 8.5
 COUNTERBORE_DEPTH = 4.2
-CHASSIS_HOLES = ((54.1, -24.35), (54.1, 24.35), (74.1, -24.35), (74.1, 24.35))
+CHASSIS_HOLES_CHASSIS = ((-61.0, -24.0), (-61.0, -8.0), (-61.0, 8.0), (-61.0, 24.0))
+CHASSIS_HOLES = tuple((x - CHASSIS_ORIGIN_X, y) for x, y in CHASSIS_HOLES_CHASSIS)
 
-# SO-101 arm mount zone around local (-50, 0).
-ARM_MOUNT_X = -50.0
+# SO-101 arm mount zone around chassis x=-155 mm.
+ARM_MOUNT_X = -155.0 - CHASSIS_ORIGIN_X
 ARM_HOLES = ((-30.0, -25.0), (-30.0, 25.0), (30.0, -25.0), (30.0, 25.0))
 STRAP_SLOTS_X = (-28.0, 28.0)   # relative to ARM_MOUNT_X
 STRAP_SLOT_Y = 40.0
 STRAP_SLOT_LENGTH = 20.0
 STRAP_SLOT_WIDTH = 4.5
 
-# Underside cantilever ribs (chassis rear face at local +2).
-RIB_X_MIN = -90.0
-RIB_X_MAX = 0.0
+# Underside cantilever ribs. Chassis rear face is x=-103 mm, local +19.5;
+# the ribs stop 2 mm short of that face.
+RIB_X_MIN = -72.5
+RIB_X_MAX = 17.5
 RIB_WIDTH = 6.0
 RIB_DEPTH = 15.0
 RIB_Y = 44.0                    # rib centerline, both sides
-WEB_X_MIN = -90.0
-WEB_X_MAX = -84.0
+WEB_X_MIN = -72.5
+WEB_X_MAX = -66.5
 
 
 def slot_x(length: float, width: float, height: float):
@@ -60,8 +68,7 @@ def slot_x(length: float, width: float, height: float):
 def gen_step():
     plate = Box(PLATE_X, PLATE_Y, PLATE_Z, align=(Align.CENTER, Align.CENTER, Align.MIN))
 
-    # Chassis anchors: M4 through + top counterbore (screw heads or the lidar
-    # tower standoff bases sit flush on the deck).
+    # Chassis anchors: M4 through + top counterbore for socket-head screws.
     for x, y in CHASSIS_HOLES:
         through = Cylinder(M4_CLEARANCE / 2, PLATE_Z + 2, align=(Align.CENTER, Align.CENTER, Align.MIN))
         plate -= through.moved(Location((x, y, -1)))
@@ -92,5 +99,5 @@ def gen_step():
               align=(Align.CENTER, Align.CENTER, Align.MAX))
     plate += web.moved(Location(((WEB_X_MIN + WEB_X_MAX) / 2, 0, 0)))
 
-    plate.label = "mentorpi_so101_deck_plate_v2"
+    plate.label = "mentorpi_so101_deck_plate_v3"
     return plate

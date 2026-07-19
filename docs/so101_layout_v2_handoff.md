@@ -1,3 +1,28 @@
+> 2026-07-19 layout v3 closure
+>
+> This handoff records the investigation path. The current conclusions below
+> supersede the unresolved layout v2 branches in §3 and §6:
+>
+> - §3.1 resolved from the recovered pre-calibration xacro plus STL geometry:
+>   `laser_joint xyz=-0.012242 0 0.092501`; scan plane 143.001 mm above ground;
+>   lidar is directly mounted and all fake tower visuals are removed.
+> - §3.2 remains open: the old camera joint belonged to the removed gimbal and
+>   must be recalibrated after the final camera bracket is fixed.
+> - §3.4 resolves to branch B. The rear holes do not mount lidar; the deck ends
+>   at chassis x=-50 mm, leaving 10.95 mm plan clearance to the lidar mesh.
+> - The accepted STL hole row is x=-61 mm, y=-24/-8/+8/+24 mm, nominal Ø4.3,
+>   16 mm pitch. The real holes are unthreaded through holes; the deck uses
+>   Ø4.5 clearance with M4 screws + nuts. The separate front two are unused.
+> - §3.5 resolved: the real-geometry arm mask is ±24°, and the corrected full
+>   shoulder-pan sweep has 36.2 mm worst clearance to the lidar head.
+> - §3.6 items 1 and 2 are closed without further measurement. Items 3–6
+>   remain physical integration inputs; only item 3 blocks camera recalibration.
+>
+> Do not execute the old §6 steps 1–2; the CAD, URDF and mask are already
+> regenerated from the conclusions above.
+>
+---
+
 # SO-101 集成布局 v2 —— 交接文档
 
 - 日期：2026-07-18

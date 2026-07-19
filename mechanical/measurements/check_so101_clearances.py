@@ -1,18 +1,11 @@
 #!/usr/bin/env python3
-"""Real-mesh clearance analysis for the SO-101 layout v2 (arm forward, lidar stays).
+"""Real-mesh clearance analysis for the SO-101 direct-mount lidar layout.
 
-This is the design-decision record for the arm mount position: it computes
-minimum vertex-cloud distances (not AABBs) between the SO-101 links and
-
-  * the lidar head (laser_frame mesh), and
-  * the four ASSUMED tower posts at the Codex-inferred chassis holes,
-
-both at zero pose and across the full shoulder_pan sweep. Layout v2 chose
-mount x=-0.155 from this analysis (worst pan-sweep clearance: 23.1 mm to the
-head, 11.4 mm to the assumed posts; zero pose 66.9/25.2/11.5 mm).
-
-Post positions are parameters, not measurements — update POSTS after the P0
-caliper audit and re-run.
+This design-decision check computes minimum vertex-cloud distances (not
+AABBs) between the SO-101 links and the lidar head at zero pose and across
+the full shoulder_pan sweep. With the recovered direct-mount lidar TF,
+mount x=-0.155 has 36.2 mm worst-case head clearance over the full +/-110
+degree sweep (2026-07-19 run, 5 degree step).
 
 Usage:
   python check_so101_clearances.py <urdf> [--mount-dx 0.0 ...] [--pan-step 5]
@@ -33,10 +26,6 @@ from check_urdf_clearances import apply, points_from_stl, transform  # noqa: E40
 
 REPO = Path(__file__).resolve().parents[2]
 
-# Assumed lidar tower posts: Codex-inferred chassis holes (base_link frame).
-POSTS = ((-0.0509, 0.0244), (-0.0509, -0.0244), (-0.0309, 0.0244), (-0.0309, -0.0244))
-POST_RADIUS = 0.004
-POST_Z = (0.0575, 0.145)  # chassis top plate .. lidar head underside (base_link frame)
 
 CHECK_LINKS = ("so101_base_link", "so101_shoulder_link", "so101_upper_arm_link")
 
@@ -90,12 +79,6 @@ def min_dist(a, b):
     return best
 
 
-def post_dist(pts, base_z):
-    zsel = pts[(pts[:, 2] >= base_z + POST_Z[0]) & (pts[:, 2] <= base_z + POST_Z[1])]
-    if len(zsel) == 0:
-        return math.inf
-    return min((np.hypot(zsel[:, 0] - px, zsel[:, 1] - py) - POST_RADIUS).min() for px, py in POSTS)
-
 
 def rot_axis(axis, q):
     ax = np.asarray(axis, float)
@@ -119,7 +102,6 @@ def main():
     args = ap.parse_args()
 
     links, world, jmap = load_model(args.urdf)
-    base_z = world["base_link"][2, 3]
     head_w = apply(world["laser_frame"], link_cloud(links, "laser_frame"))
     mount0 = world["so101_base_link"]
 
@@ -140,21 +122,17 @@ def main():
         print("  zero pose:")
         for n, cl in clouds.items():
             pw = apply(mount @ rel[n], cl)
-            print(f"    {n:24s} head {min_dist(pw, head_w) * 1000:7.1f} mm"
-                  f"   posts {post_dist(pw, base_z) * 1000:7.1f} mm")
-        worst_h, worst_p, arg_h, arg_p = math.inf, math.inf, 0, 0
+            print(f"    {n:24s} head {min_dist(pw, head_w) * 1000:7.1f} mm")
+        worst_h, arg_h = math.inf, 0
         sh = clouds["so101_shoulder_link"]
         for qd in range(int(math.degrees(lo_a)), int(math.degrees(hi_a)) + 1, args.pan_step):
             t = mount @ rel_pan @ rot_axis(axis, math.radians(qd))
             pw = apply(t, sh)
-            dh, dp = min_dist(pw, head_w), post_dist(pw, base_z)
+            dh = min_dist(pw, head_w)
             if dh < worst_h:
                 worst_h, arg_h = dh, qd
-            if dp < worst_p:
-                worst_p, arg_p = dp, qd
         print(f"  pan sweep [{math.degrees(lo_a):.0f},{math.degrees(hi_a):.0f}]deg, shoulder:"
-              f" worst head {worst_h * 1000:.1f} mm @{arg_h:+d}deg,"
-              f" worst posts {worst_p * 1000:.1f} mm @{arg_p:+d}deg")
+              f" worst head {worst_h * 1000:.1f} mm @{arg_h:+d}deg")
 
 
 if __name__ == "__main__":

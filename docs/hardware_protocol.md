@@ -290,7 +290,7 @@ axes[7] = hat_y  D-pad Y
 | 话题 | `/scan` (sensor_msgs/LaserScan) |
 | QoS | Best Effort (SensorDataQoS) |
 | Frame ID | `laser_frame` |
-| TF | `base_link` → `laser_frame` (z=0.18m) |
+| TF | `base_link` → `laser_frame` (`xyz=-0.012242 0 0.092501`，直装) |
 
 ### 驱动来源与编译
 
@@ -361,7 +361,7 @@ ros2 launch mentorpi_bringup mapping.launch.py
 
 ```
 map → odom → base_link → laser_frame
-(slam_toolbox)  (base_node)   (静态, z=0.18m)
+(slam_toolbox)  (base_node)   (静态, xyz=-0.012242 0 0.092501m)
 ```
 
 ### 配置文件
