@@ -4,7 +4,28 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-A ROS 2 Jazzy workspace for the MentorPi robot — a Raspberry Pi 5 + RRCLite STM32 mecanum-wheel car with a 2-DOF camera gimbal, MS200 lidar, and Orbbec Gemini 2L depth camera. The workspace lives at `/home/pi/workdir/mentorpi/mentorpi_ws/`.
+A ROS 2 Jazzy workspace for the MentorPi robot — a Raspberry Pi 5 + RRCLite STM32 mecanum-wheel car with an MS200 lidar, an Orbbec Gemini 2L depth camera, and an optional LeRobot SO-101 arm. The old 2-DOF camera gimbal has been removed; the final camera mount and new extrinsic are still pending. The deployed workspace lives at `/home/pi/workdir/mentorpi/mentorpi_ws/`.
+
+## Continuation & Handoff Protocol
+
+For SO-101 work, start with `docs/so101_handoff.md`. It is the current-state handoff; old integration reports and commit logs are historical evidence, not an execution plan.
+
+At the start of any continuation:
+
+1. Run `git status --short --branch` and classify every dirty file before editing. Preserve user-owned changes; in particular, `src/mentorpi_supervisor/foxglove_layout/loc_check.json` has been user-owned during the SO-101 work and must not be staged or reverted without explicit instruction.
+2. Read the current handoff, then the relevant parameterized sources. If the handoff conflicts with source plus reproducible validation, source/validation wins and the handoff must be rewritten in place. Do not accumulate correction banners on top of obsolete plans.
+3. Separate facts by authority: user-confirmed physical facts > deterministic CAD/STL measurements > clearly labeled assumptions. Never silently promote an inference to a measurement.
+4. Edit sources first: xacro/Python CAD/config generators. Regenerate STEP/STL/URDF/GLB and package copies, then run proportional validation. Do not patch generated artifacts as the source of truth.
+5. Calibration and appearance are separate. Never change a TF calibration merely to make a render look centered; use visual origins for mesh-intrinsic offsets and physical experiments for joint transforms.
+
+For mechanical/URDF changes, the minimum handoff record is: current invariants, authoritative files, generated artifacts, exact validation results, remaining physical inputs, next ordered action, blocker/owner, baseline commit, push state, and user-owned dirty files. Replace a stale handoff instead of preserving a chronological transcript.
+
+Important generation traps:
+
+- Top-level xacro uses `$(find mentorpi_description)` and can read the installed package copy. Rebuild/source `mentorpi_description` before final generation, or deliberately generate from the direct source xacro while diagnosing.
+- The printable Python CAD file and xacro placement must change together; after regenerating STL, synchronize the package copy under `src/mentorpi_description/meshes/accessories/`.
+- CAD inspection must include deterministic geometry facts plus at least one reviewed snapshot.
+- The current three.js-family URDF viewers can scatter fixed-joint subtrees. Use `mechanical/urdf/bake_urdf_glb.py` and the baked zero-pose GLB for reliable whole-robot visual review.
 
 ## Build & Run
 
@@ -107,7 +128,7 @@ oradar_scan ─→ /scan (避障用，不参与 3D 建图)
 **2D SLAM:**
 ```
 map → odom → base_link → laser_frame
-(slam_toolbox) (EKF)     (static, z=0.18m)
+(slam_toolbox) (EKF)     (static, xyz=-0.012242 0 0.092501)
 ```
 
 **3D SLAM(异构架构):**
@@ -115,10 +136,10 @@ map → odom → base_link → laser_frame
 map → odom → base_link → camera_link → camera_*_optical_frame
 (rtabmap) (EKF)        (static)        (orbbec driver)
                        → laser_frame
-                         (static, z=0.18m)
+                         (static, xyz=-0.012242 0 0.092501)
 ```
 
-**固定 TF 的源头是 URDF**:`base_link → imu_link/camera_link/laser_frame` 由 `mentorpi_description/urdf/mecanum.xacro` 定义,`base.launch.py` 里的 robot_state_publisher 以 `runtime_mode:=true` 渲染发布(该模式省略 `base_footprint`——EKF 拥有 odom→base_link——和 Orbbec 驱动自己发的 optical frames)。相机外参已于 2026-07-12 AprilTag 手眼标定(`camera_joint`: xyz=0.0846 0.0231 0.095, rpy=-0.0032 0.0149 -0.0422,z 为尺量固定值);重标后可用 `scripts/calibrate_camera_extrinsic.py --update-xacro` 写回。轮子是 continuous joint,由 joint_state_publisher 发零位 `/joint_states` 补齐 TF(无编码器)。
+**固定 TF 的源头是 URDF**：`base_link → imu_link/camera_link/laser_frame` 由 `mentorpi_description/urdf/mecanum.xacro` 定义，`base.launch.py` 的 robot_state_publisher 以 `runtime_mode:=true` 渲染发布。雷达是已恢复的直装变换；旧 2-DOF 云台已拆除，因此当前 `camera_joint` 只作历史记录，最终相机支架固定后必须重新做 AprilTag 标定。轮子是 continuous joint，由 joint_state_publisher 发零位 `/joint_states` 补齐 TF（无编码器）。
 
 **相机生命周期**:Gemini 2L 在 `base.launch.py` 里**常驻**(15fps RGB-D),`/camera/color/image_raw` 始终可订,跨模式切换不重启相机。`slam_3d` 模式只在已运行的相机流上加 rtabmap + 点云;2D / loc / idle 模式也能直接用相机预览(虽然没用到 depth)。永久代价:相机 driver ~15-20% CPU on Pi 5。
 
@@ -227,7 +248,7 @@ STM32 (Function=7, 6×float32: ax,ay,az,gx,gy,gz)
 
 ## Calibration
 
-TF tree calibration plan (3 parts: wheel odometry → IMU → camera) documented in `docs/calibration.md`. Status: **TODO, not yet started**. Part 3 (camera extrinsic) will use AprilTag method + a self-developed calibration tool.
+TF tree calibration plan (wheel odometry → IMU → camera) is documented in `docs/calibration.md`. Wheel effective parameters and gyro scale/bias handling have prior calibration work; IMU mounting refinement remains. The previous camera extrinsic is invalid because its gimbal was removed, so Part 3 must be repeated only after the final camera bracket is fixed.
 
 ~~Known issue: missing `base_link → imu_link` static TF~~ — **已修复**,`base.launch.py` 现在发布该 TF(平移是估计值,轴向对齐才关键;若控制板装歪需改 RPY)。Part 2 标定时精化。
 
@@ -367,8 +388,8 @@ rviz2
 
 | Joint | Parent → Child | xyz (m) | rpy (rad) | Notes |
 |-------|----------------|---------|-----------|-------|
-| `camera_joint` | `base_link → camera_link` | 0.0846 0.0231 0.095 | -0.0032 0.0149 -0.0422 | AprilTag 手眼标定 2026-07-12,z 尺量固定;重标用 `calibrate_camera_extrinsic.py --update-xacro` 写回 |
-| `laser_joint` | `base_link → laser_frame` | 0 0 0.18 | 0 0 0 | z 已实测;x/y 与 yaw 待精量(TODO) |
+| `camera_joint` | `base_link → camera_link` | 0.1114 0.0305 0.0950 | -0.0164 -0.1302 0.0147 | **失效历史值**：对应已拆除的 2-DOF 云台；最终支架固定后用 `calibrate_camera_extrinsic.py --update-xacro` 重标 |
+| `laser_joint` | `base_link → laser_frame` | -0.012242 0 0.092501 | 0 0 0 | 从标定前 xacro + STL 恢复的直装变换；扫描面离地 143.001 mm |
 | `imu_joint` | `base_link → imu_link` | 0 0 0.05 | 0 0 0 | 估计值,Part 2 标定精化 |
 
 平移误差 → 点云整体偏移;旋转误差 → 点云累积"分层"伪影。改完 xacro 需 `colcon build --packages-select mentorpi_description` 后重启 base。
@@ -485,26 +506,28 @@ unit 文件在 `scripts/mentorpi-remote.service`,关键点:
 
 **语音接入**：AsynchronousIntentRoutingEngine（独立仓库）的 `robot` skill 通过 rosbridge (:9090) 调上述接口；服务器端设 `AIR_ROBOT_ROSBRIDGE_URL=ws://<robot-ip>:9090` 即启用。手动验证：AIRE 仓库 `python robot_cli.py ws://<robot-ip>:9090 move forward 0.5`。整体规划见 `docs/roadmap.md`。
 
-## SO-101 机械臂集成（布局 v2，机械件待打印装配）
+## SO-101 机械臂集成（layout v3，甲板 CAD 已定型、待实物装配）
 
-LeRobot SO-101 车载集成，设计决策与几何分析见 `mechanical/README.md` +
-`mechanical/urdf/design-ledger.md`（Codex 初版方案与评审见
-`docs/mentorpi_so101_integration_report.md`，已被 v2 取代）：
+当前执行入口是 `docs/so101_handoff.md`；设计摘要和几何账本分别见
+`mechanical/README.md`、`mechanical/urdf/design-ledger.md`。旧 integration
+report 和 layout v2 提交只用于追溯，不再作为待办清单。
 
-- **臂朝前**，基座挂在车尾甲板 `x=-0.155`（真网格 pan 扫掠选点）；Gemini 2L
-  即 VLA context 相机。抓取作业停车进行（motion primitive 安全模型）。
-- **雷达不动**（z=0.18 不变，地图资产保值）。装臂后 oradar 发 `/scan_raw`，
-  `laser_filters` 掩膜后向 ±52° 自体扇区再发 `/scan`（下游无感知）。
-  部署依赖：`sudo apt install ros-jazzy-laser-filters`。
-- **启用开关**：`with_so101:=true`（remote.launch.py → base.launch.py →
-  xacro）。默认 false 时 TF/扫描链路与无臂完全一致；systemd 部署改
-  ExecStart 加参数。离线预览：`display.launch.py with_so101:=true`。
-- **臂供电**：独立 2S 锂电（STS3215 原生 7.4V）+ 保险丝 + 带锁开关，前挂
-  托架兼前配重；不走 USB-PD，不碰 Pi/RRCLite 电源轨。
-- 打印件：`mechanical/printable/so101_deck_plate.py` / `battery_tray_2s.py`
-  （参数化,实测后改常量重出）；间隙复核
-  `mechanical/measurements/check_so101_clearances.py`。
-- **P0 未完成**：底盘后部 4 孔卡尺实测（当前全部按 Codex 网格推测设计）。
+- **臂朝前**，`base_link -> so101_base_link xyz=-0.155 0 0.0655`。恢复雷达
+  直装 TF 后，真实网格 pan ±110° 全扫转最差雷达头间隙 36.2 mm。
+- **雷达直接贴装**，`laser_joint xyz=-0.012242 0 0.092501`，扫描面离地
+  143.001 mm；没有塔架或增高座。甲板止于 x=-0.050，与雷达保留
+  10.95 mm 平面间隙。
+- **甲板四孔**：底盘 x=-61 mm，y=-24/-8/+8/+24 mm，Ø4.5 打印通孔，
+  M4 螺丝 + 垫圈 + 螺母。用户已确认孔无螺纹、贯穿且不固定雷达。
+- **自体掩膜**：装臂后 oradar 发 `/scan_raw`，`laser_filters` 按真实几何
+  掩膜后向 ±24° 后发 `/scan`。部署依赖 `ros-jazzy-laser-filters`。
+- **启用开关**：`with_so101:=true` 从 remote.launch.py 透传到 base.launch.py
+  和 xacro；默认 false 不加入臂、甲板和扫描滤波器。
+- **相机外参待重标**：旧 2-DOF 云台已拆除，当前 `camera_joint` 只是历史值；
+  最终支架固定后才运行 AprilTag 标定。
+- **供电**：独立 2S 锂电 + 保险丝 + 带锁开关到 Feetech 板。前托架的
+  `HOOK_THROAT` 和 `PACK_*` 仍需用实物尺寸更新。
+- 参数化源、派生物、验证命令和下一步顺序全部维护在当前交接文档中。
 
 ## 3D 可视化 & 高斯泼溅 (Gaussian Splatting)
 
