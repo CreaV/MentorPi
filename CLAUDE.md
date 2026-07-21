@@ -6,26 +6,48 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A ROS 2 Jazzy workspace for the MentorPi robot — a Raspberry Pi 5 + RRCLite STM32 mecanum-wheel car with an MS200 lidar, an Orbbec Gemini 2L depth camera, and an optional LeRobot SO-101 arm. The old 2-DOF camera gimbal has been removed; the final camera mount and new extrinsic are still pending. The deployed workspace lives at `/home/pi/workdir/mentorpi/mentorpi_ws/`.
 
-## Continuation & Handoff Protocol
+## Session Continuation & Handoff Protocol
 
-For SO-101 work, start with `docs/so101_handoff.md`. It is the current-state handoff; old integration reports and commit logs are historical evidence, not an execution plan.
+`docs/handoff.md` is the repository-wide rolling handoff for the current agent session. It is not tied to SO-101 or any feature. Every agent and every task uses the same file.
 
-At the start of any continuation:
+At the start of a continuation:
 
-1. Run `git status --short --branch` and classify every dirty file before editing. Preserve user-owned changes; in particular, `src/mentorpi_supervisor/foxglove_layout/loc_check.json` has been user-owned during the SO-101 work and must not be staged or reverted without explicit instruction.
-2. Read the current handoff, then the relevant parameterized sources. If the handoff conflicts with source plus reproducible validation, source/validation wins and the handoff must be rewritten in place. Do not accumulate correction banners on top of obsolete plans.
-3. Separate facts by authority: user-confirmed physical facts > deterministic CAD/STL measurements > clearly labeled assumptions. Never silently promote an inference to a measurement.
-4. Edit sources first: xacro/Python CAD/config generators. Regenerate STEP/STL/URDF/GLB and package copies, then run proportional validation. Do not patch generated artifacts as the source of truth.
-5. Calibration and appearance are separate. Never change a TF calibration merely to make a render look centered; use visual origins for mesh-intrinsic offsets and physical experiments for joint transforms.
+1. Run `git status --short --branch` and `git log -5 --oneline --decorate` before editing.
+2. Read `docs/handoff.md`, then inspect the source files directly relevant to the current request.
+3. Classify every dirty file as user-owned, prior-agent work, or current-task work. Preserve user-owned changes and never stage, overwrite, or revert them without explicit instruction.
+4. Treat the handoff as orientation, not proof. If it conflicts with current source, Git state, or reproducible validation, those sources win.
 
-For mechanical/URDF changes, the minimum handoff record is: current invariants, authoritative files, generated artifacts, exact validation results, remaining physical inputs, next ordered action, blocker/owner, baseline commit, push state, and user-owned dirty files. Replace a stale handoff instead of preserving a chronological transcript.
+Before ending any agent session, or whenever the user asks to stop, close, compact, or hand work to another agent, rewrite `docs/handoff.md`. Do this even if the user did not separately ask for documentation.
 
-Important generation traps:
+Use the model's built-in compact/conversation-summary capability as drafting input when useful: compress the full conversation into decisions, actions, evidence, and open work. Do not paste a raw transcript or an unverified compact summary. Re-check Git status, recent commits, changed files, tests, and current source before writing.
 
-- Top-level xacro uses `$(find mentorpi_description)` and can read the installed package copy. Rebuild/source `mentorpi_description` before final generation, or deliberately generate from the direct source xacro while diagnosing.
-- The printable Python CAD file and xacro placement must change together; after regenerating STL, synchronize the package copy under `src/mentorpi_description/meshes/accessories/`.
-- CAD inspection must include deterministic geometry facts plus at least one reviewed snapshot.
-- The current three.js-family URDF viewers can scatter fixed-joint subtrees. Use `mechanical/urdf/bake_urdf_glb.py` and the baked zero-pose GLB for reliable whole-robot visual review.
+The handoff should be concise and contain:
+
+1. What this session was trying to accomplish.
+2. What was actually changed or decided, including important user-provided facts.
+3. Commits created, push state, and current branch.
+4. Validation that actually ran and its result; distinguish unrun checks.
+5. What remains, why it remains, who/what blocks it, and the exact next action.
+6. Current working-tree state, especially user-owned or unrelated dirty files.
+7. Only the key files and commands needed to resume efficiently.
+
+Handoff quality rules:
+
+- Rewrite the file for the current session; do not append correction banners or preserve a chronological chat log.
+- Lead with the current state and remaining work. Keep historical detail only when it explains a decision that would otherwise be reversed.
+- Separate facts by authority: user-confirmed physical facts > deterministic measurements/tests > clearly labeled assumptions.
+- Never claim a test, build, deployment, commit, or push happened unless it actually did.
+- If several independent task threads remain, list each with its own status and next action.
+- A handoff update is documentation, not permission to stage, commit, push, deploy, or modify unrelated files.
+
+Task-specific source-of-truth rules still apply. For mechanical/URDF work:
+
+- Edit xacro/Python CAD/config generators first; regenerate STEP/STL/URDF/GLB and package copies, then validate. Do not patch generated artifacts as the source of truth.
+- Calibration and appearance are separate. Never change a TF calibration merely to make a render look centered.
+- Top-level xacro can resolve the installed `mentorpi_description`; rebuild/source it before final generation or deliberately use the direct source while diagnosing.
+- Keep printable CAD and xacro placement synchronized; copy regenerated STL into `src/mentorpi_description/meshes/accessories/`.
+- CAD inspection requires deterministic geometry facts plus a reviewed snapshot.
+- three.js-family URDF viewers can scatter fixed-joint subtrees; use `mechanical/urdf/bake_urdf_glb.py` for reliable whole-robot visual review.
 
 ## Build & Run
 
@@ -508,7 +530,7 @@ unit 文件在 `scripts/mentorpi-remote.service`,关键点:
 
 ## SO-101 机械臂集成（layout v3，甲板 CAD 已定型、待实物装配）
 
-当前执行入口是 `docs/so101_handoff.md`；设计摘要和几何账本分别见
+本轮会话状态见统一入口 `docs/handoff.md`；设计摘要和几何账本分别见
 `mechanical/README.md`、`mechanical/urdf/design-ledger.md`。旧 integration
 report 和 layout v2 提交只用于追溯，不再作为待办清单。
 
