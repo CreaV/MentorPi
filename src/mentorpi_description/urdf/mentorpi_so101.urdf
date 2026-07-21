@@ -164,20 +164,19 @@
       <mass value="0.027"/>
       <inertia ixx="1.44E-05" ixy="0" ixz="0" iyy="1.66E-06" iyz="0" izz="1.46E-05"/>
     </inertial>
-    <!-- 视觉修正(纯外观): cam_Link.STL 以机身顶面中心为原点建模,而
-         camera_link 是标定出的光学中心——彩色镜头偏离机身中心 ~3cm(y),
-         位于前脸(x)、中高(z)。不加偏移时机身网格会整体跟着光学系平移,
-         看起来"装歪"。此机身内参式偏移仍有效；但云台已拆除，下面的
-         camera_joint 是旧安装方式的历史值，最终固定后必须重标。 -->
+    <!-- 直装方案: 云台已拆除, 相机直接贴装基座、无支撑。camera_link 回归
+         cam_Link.STL 的本体原点(机身顶面中心), 故 visual/collision 偏移归零,
+         与 camera_joint 的 vendor CAD 直装值成对。光学系挂在本体原点上属近似,
+         待 AprilTag 重标精化到真实光学中心。 -->
     <visual>
-      <origin rpy="0 0 0" xyz="-0.0137 -0.0305 0.013"/>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
         <mesh filename="package://mentorpi_description/meshes/mecanum/cam_Link.STL"/>
       </geometry>
       <material name="black"/>
     </visual>
     <collision>
-      <origin rpy="0 0 0" xyz="-0.0137 -0.0305 0.013"/>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
         <mesh filename="package://mentorpi_description/meshes/mecanum/cam_Link.STL"/>
       </geometry>
@@ -186,9 +185,10 @@
   <joint name="camera_joint" type="fixed">
     <parent link="base_link"/>
     <child link="camera_link"/>
-    <!-- STALE: AprilTag hand-eye calibration from the removed 2-DOF gimbal,
-         2026-07-17. Keep only as provenance until the direct mount is final. -->
-    <origin rpy="-0.0164 -0.1302 0.0147" xyz="0.1114 0.0305 0.0950"/>
+    <!-- Vendor CAD 直装值(从 mecanum.pre_calibration.xacro 恢复)。相机直接贴装
+         基座、无支撑; 这是粗定位, 实装可能有位移。最终固定后跑 AprilTag 手眼
+         标定, 用 calibrate_camera_extrinsic.py 的 update-xacro 选项精化本变换。 -->
+    <origin rpy="0 0 0" xyz="0.061376 0 0.051154"/>
   </joint>
   <link name="camera_color_optical_frame"/>
   <joint name="camera_color_optical_joint" type="fixed">
