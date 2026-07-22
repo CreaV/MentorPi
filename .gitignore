@@ -19,3 +19,6 @@ IMG_*.jpg
 
 # baked preview GLB (derived, regenerate with mechanical/urdf/bake_urdf_glb.py)
 *.preview.glb
+
+# Isaac USD conversions (large, user-generated)
+isaac/usd/
