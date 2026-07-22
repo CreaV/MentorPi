@@ -174,22 +174,18 @@
 - [ ] 远期:VIO(相机 IMU 重新启用做视觉惯性里程计)或 GS 渲染式定位
       (research 向,roadmap P4)。
 
-## 4.7 传感器演进:pan/tilt 单目相机方案（2026-07-12 定调）
+## 4.7 相机型号:实机是 Gemini 2,部分功能引用仍写 2L(待核对)
 
-如果把 Gemini 2L 换成 2 自由度云台单目相机,**定位精度可以保住,但
-主力必须换成激光雷达**——现在的精度里激光 ICP 本来就承担大头:
+实机深度相机确认是 **Orbbec Gemini 2**(非 Gemini 2L)。文档散文名已统一为
+Gemini 2;但下列**功能性**引用仍指向 2L,**当前运转正常**,改动需在 Pi 上
+验证(确认 orbbec 包提供对应 launch、PID 正确、相机 bringup 正常)后再动:
 
-- **定位主力 → 2D 激光**(slam_toolbox loc / AMCL),室内同样 2~5cm,
-  与相机完全解耦,精度不降。
-- **失去的能力**:rtabmap RGB-D 定位/3D 彩色地图/GS 数据集导出
-  (单目无度量深度,rtabmap 建图要求 depth 或双目)。想保 3D 地图,
-  深度相机留着"建图会话专用",平时不跑。
-- **动态外参问题**:云台一动 base_link→camera 就不是静态 TF。方案 =
-  舵机角度实时发 joint TF;但 PWM 舵机精度 ~1-2°,3m 外即 5-10cm
-  投影误差 → **参与 SLAM/定位的帧只在云台归中锁死时取**,自由转动
-  时相机只做感知(找人/看物/VLA 输入),不进定位管线。
-- **建议架构**:激光管定位、云台单目管感知,各干强项;VLA/语音的
-  motion primitive 底座不受影响。
+- [ ] `src/mentorpi_bringup/launch/camera.launch.py:26` include 的
+      `gemini2L.launch.py` → 若 orbbec 包提供 `gemini2.launch.py` 则改用并实测。
+- [ ] `README.md` 示例里的 `camera_type:=gemini2l` 参数值。
+- [ ] USB PID `2bc5:0670`(见 CLAUDE.md / docs/power_troubleshooting.md /
+      camera_watchdog.py 的 `usbreset`)—— Gemini 2 与 2L 的 VID:PID 不同,
+      核对实机 `lsusb` 后更新。
 
 ## 4.5 今日遗留问题（2026-07-05 晚，按优先级）
 

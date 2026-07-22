@@ -16,7 +16,7 @@
   Plate-to-lidar plan clearance is 10.95 mm; rear cantilever remains 92 mm.
 - The arm-enabled rear scan mask is ±24° (0.418879 rad), derived by intersecting
   the actual chassis and SO-101 mesh triangles with the corrected scan plane.
-- The old `camera_joint` transform belonged to the removed gimbal and is stale.
+- The old `camera_joint` transform belonged to the previous camera mount and is stale.
   Its mesh-intrinsic cosmetic offset remains valid, but the joint must be
   recalibrated only after the final camera bracket is fixed.
 - Printed-mount inertials remain provisional estimates pending measured mass.

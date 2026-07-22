@@ -2,7 +2,7 @@
 Remote operation entry point.
 
 Brings up:
-  - base.launch.py             (always-on hardware + Gemini 2L)
+  - base.launch.py             (always-on hardware + Gemini 2)
   - mentorpi_supervisor        (mode switcher: /mode/set, /mode/list_maps, /mode/status)
   - foxglove_bridge      :8765 (ws -- desktop Foxglove Studio clients)
   - rosbridge_websocket  :9090 (ws -- AIRE voice skill, live_rerun.py, mobile SPA)

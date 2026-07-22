@@ -13,7 +13,7 @@ map → odom → base_link → camera_link → camera_*_optical_frame
 | `map → odom` | rtabmap / slam_toolbox | 否（算法输出） |
 | `odom → base_link` | EKF（融合 `/odom` + `/imu/data`） | **是** — 需要标定轮速里程计 + IMU |
 | `base_link → imu_link` | xacro + robot_state_publisher | **是** — 平移/RPY 是估计值，需按 Part 2 精化 |
-| `base_link → camera_link` | xacro + robot_state_publisher | **旧云台外参已失效**；最终支架定型后重标 |
+| `base_link → camera_link` | xacro + robot_state_publisher | **旧安装方式外参已失效**；最终支架定型后重标 |
 | `base_link → laser_frame` | xacro + robot_state_publisher | 已由标定前 xacro + STL 恢复：`xyz=-0.012242 0 0.092501`，直装 |
 | `camera_link → camera_*_optical_frame` | Orbbec 驱动 | 否（出厂标定） |
 
@@ -174,9 +174,9 @@ ros2 topic echo /imu/data_raw --field angular_velocity > /tmp/gyro.log
 
 ---
 
-## Part 3 — Gemini 2L 相机外参标定
+## Part 3 — Gemini 2 相机外参标定
 
-> **当前状态（2026-07-19）**：下面的 2026-07-12 数值属于已拆除的云台，
+> **当前状态（2026-07-19）**：下面的 2026-07-12 数值属于旧的相机安装方式，
 > 只作为历史记录，禁止直接复用。先固定最终相机支架，再采集一套新的 AprilTag 数据。
 
 相机外参保存在 `src/mentorpi_description/urdf/mecanum.xacro` 的 `camera_joint` 中。2026-07-12 已完成 AprilTag 手眼标定，当前值为 `xyz=0.0846 0.0231 0.095`、`rpy=-0.0032 0.0149 -0.0422`；其中 z 是尺量固定值，位置-only 残差约 9mm。

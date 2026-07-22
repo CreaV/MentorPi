@@ -45,7 +45,7 @@ usb usb2-port2: over-current change #N
 Pi 5 对外设 USB 口有总电流限制（`usb_max_current_enable=1` 时 1.6A，
 **与供电方式无关**）。外设叠加峰值就在门槛附近：
 
-- Gemini 2L IR 投射器脉冲：峰值近 1A（最大电流户）
+- Gemini 2 IR 投射器脉冲：峰值近 1A（最大电流户）
 - MS200 雷达电机：~300mA（电机取电走 USB）
 - 手柄接收器 + STM32 串口芯片：小电流
 
@@ -63,16 +63,16 @@ Pi 5 对外设 USB 口有总电流限制（`usb_max_current_enable=1` 时 1.6A�
 
 ### 解决方案
 
-**根治：带独立供电的 USB 3.0 hub（约 ¥50-100）**，把 Gemini 2L 挂上去
+**根治：带独立供电的 USB 3.0 hub（约 ¥50-100）**，把 Gemini 2 挂上去
 （雷达也建议挪）。相机是最大电流户，挪走后 Pi 的 1.6A 预算立刻宽裕，
-两种供电方式都不再跳闸。注意 Gemini 2L 必须走 USB 3.0 hub（USB 2.0 会
+两种供电方式都不再跳闸。注意 Gemini 2 必须走 USB 3.0 hub（USB 2.0 会
 `color frame is not decoded`，见 CLAUDE.md）。
 
 **台架持续调试推荐配置（不依赖电池续航）**：
 
 ```
 官方 PSU ──→ Pi 5 (Type-C)
-带电 USB3 hub ──→ Gemini 2L + 雷达
+带电 USB3 hub ──→ Gemini 2 + 雷达
 Pi 直插 ──→ STM32 数据线 + 手柄接收器（均为小电流）
 电池（开关开）──→ 仅供 STM32 板待机 + 舵机保持
 ```

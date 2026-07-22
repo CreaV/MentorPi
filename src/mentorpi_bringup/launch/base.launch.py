@@ -2,11 +2,11 @@
 Always-on base hardware. Started by remote.launch.py and remains running
 across mode switches handled by mentorpi_supervisor.
 
-Includes: base_node (serial), STM32 IMU Madgwick filter, EKF, Gemini 2L
+Includes: base_node (serial), STM32 IMU Madgwick filter, EKF, Gemini 2
 RGB-D camera (always-on preview source), joystick + teleop, lidar, and
 the base_link static TF tree.
 
-The Gemini 2L lives here (not in slam_3d) so /camera/color/image_raw is
+The Gemini 2 lives here (not in slam_3d) so /camera/color/image_raw is
 available across all modes for live preview. Switching to slam_3d adds
 rtabmap on top of the already-running camera streams.
 """
@@ -95,7 +95,7 @@ def generate_launch_description():
             parameters=[os.path.join(bringup_dir, 'config', 'ekf.yaml')],
         ),
 
-        # Gemini 2L (RGB-D, IMU disabled). Always on so preview / 3D SLAM share
+        # Gemini 2 (RGB-D, IMU disabled). Always on so preview / 3D SLAM share
         # the same camera instance -- starting slam_3d does NOT relaunch camera.
         # 由 camera_watchdog 托管 (spawns camera.launch.py): orbbec driver 的
         # USB wedge ("openUsbDevice failed" 后死循环, 服务重启时高发) 需要

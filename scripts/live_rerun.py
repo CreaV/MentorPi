@@ -130,7 +130,7 @@ def backproject_depth(depth_mm: np.ndarray, K: np.ndarray,
                       rgb: Optional[np.ndarray], stride: int,
                       max_depth: float):
     """16UC1 depth (mm, optical frame, aligned 1:1 with rgb) -> (Nx3 points
-    in the optical frame, Nx3 uint8 colors or None). Gemini 2L publishes
+    in the optical frame, Nx3 uint8 colors or None). Gemini 2 publishes
     HW-aligned depth with the color K and color frame, so pixel (u,v) in
     depth IS pixel (u,v) in rgb — no remapping needed."""
     h, w = depth_mm.shape

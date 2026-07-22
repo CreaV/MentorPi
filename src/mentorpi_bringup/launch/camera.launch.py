@@ -1,5 +1,5 @@
 """
-Gemini 2L camera bringup (RGB-D, IMU disabled), split out of base.launch.py
+Gemini 2 camera bringup (RGB-D, IMU disabled), split out of base.launch.py
 so camera_watchdog can restart just the camera when the orbbec driver wedges
 ("openUsbDevice failed" retry loop after a service restart — the driver never
 recovers on its own once open fails; observed 2026-07-05 and 2026-07-12).

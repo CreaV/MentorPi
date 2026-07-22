@@ -37,7 +37,7 @@ correction, edit the constants and re-run the generators.
 
 Layout v2 replaces the v1 (Codex) rear-facing-arm + lidar-riser concept:
 
-- **Arm faces forward** (mount yaw 0 at chassis `x=-0.155`): the Gemini 2L is
+- **Arm faces forward** (mount yaw 0 at chassis `x=-0.155`): the Gemini 2 is
   the natural VLA context camera; the gripper enters frame when reaching.
   Mount x was chosen by real-mesh pan-sweep clearance analysis
   (`measurements/check_so101_clearances.py`): worst-case over the full ±110°

@@ -1,5 +1,5 @@
 """
-Camera watchdog: supervises the Gemini 2L driver (camera.launch.py) and
+Camera watchdog: supervises the Gemini 2 driver (camera.launch.py) and
 auto-recovers the known USB wedge.
 
 Failure mode (observed 2026-07-05, 2026-07-12): after a service restart the
