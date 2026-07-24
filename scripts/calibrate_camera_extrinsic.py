@@ -218,7 +218,7 @@ async def capture(robot, det, out: Path, records: list, note: str):
 
 
 async def collect(url: str, aire_path: str, tag_size: float, out: Path,
-                  intrinsics=None):
+                  intrinsics=None, far_dist: float = 1.6, near_dist: float = 1.0):
     robot = Robot(url, aire_path)
     if intrinsics is not None:
         fx, fy, cx, cy = intrinsics
@@ -293,9 +293,9 @@ async def collect(url: str, aire_path: str, tag_size: float, out: Path,
         return None if r is None else float(np.linalg.norm(np.array(r[0])[:3, 3]))
 
     await station("S0 arc")
-    # 后退拉大基线到 ~1.6m (或被守卫/失检拦住)
+    # 后退拉大基线到 far_dist (或被守卫/失检拦住)
     d = await tag_dist()
-    while d is not None and d < 1.6:
+    while d is not None and d < far_dist:
         if not await robot.move("backward", 0.25):
             print(f"  rear blocked at tag dist {d:.2f}m")
             break
@@ -307,7 +307,7 @@ async def collect(url: str, aire_path: str, tag_size: float, out: Path,
         if d is None:
             print("  line: tag lost, stopping")
             break
-        if d < 1.0:  # 站位下限: 下一步后仍 >0.75m
+        if d < near_dist:  # 站位下限: 下一步后仍 >0.75m
             print(f"  line: reached closest station (tag {d:.2f}m)")
             break
         if not await robot.move("forward", 0.25):
@@ -551,6 +551,10 @@ def main():
     ap.add_argument("--cam-z", type=float, default=0.095,
                     help="ruler-measured camera height above base_link (m)")
     ap.add_argument("--out", default="/tmp/calib_run")
+    ap.add_argument("--far-dist", type=float, default=1.6,
+                    help="line-station far tag distance (m); lower for tight rooms")
+    ap.add_argument("--near-dist", type=float, default=1.0,
+                    help="closest line-station tag distance (m); never below tablet safety")
     ap.add_argument("--solve-only", metavar="DIR")
     ap.add_argument("--update-xacro", action="store_true",
                     help="atomically update camera_joint after a good solve")
@@ -574,7 +578,8 @@ def main():
         ap.error("url required unless --solve-only")
     out = Path(args.out)
     ok = asyncio.run(collect(args.url, args.aire_path, args.tag_size, out,
-                             intrinsics=args.intrinsics))
+                             intrinsics=args.intrinsics,
+                             far_dist=args.far_dist, near_dist=args.near_dist))
     if ok:
         result = solve(out, args.cam_z, trust_odom=True)
         apply_result(result, args)
