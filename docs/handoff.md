@@ -1,8 +1,8 @@
 # Agent Handoff
 
-- 更新时间：2026-07-22
+- 更新时间：2026-07-24
 - 分支：`feat/voice-vla-extensions`
-- 本会话提交（均在 `feat/voice-vla-extensions`，结束时已 push 到 origin，见 `git log`）：相机恢复直装外参（`84598e6`）、文档清理（Gemini 2L→2 + 云台移出文档）、Isaac Sim/Lab 导出。
+- 关键提交（均已 push origin）：相机恢复直装（`84598e6`）、文档清理 Gemini 2L→2 + 云台（`728ce5c`）、Isaac 导出（`4410caf`）、**AprilTag 相机外参标定 RMS 9.6mm（`0846f7e`，已部署 Pi 并验证 TF）**。
 - 工作树：clean。
 - 用户自有文件：本会话已按用户明确指示 `git restore` 掉 `loc_check.json`，工作树不再有它
 
@@ -12,7 +12,7 @@
 
 1. **交接机制泛化**（提交 `6e4aff4`，已推送）：`so101_handoff.md → docs/handoff.md`，`CLAUDE.md` 改为项目级，加 `AGENTS.md → CLAUDE.md` 软链。按用户明确指示 `git restore` 丢弃了 `loc_check.json` 的 Foxglove 布局改动。
 2. **相机恢复直装外参**（提交 `84598e6`，**未推送**）：详见下节。
-3. **相机外参重标（Part 3）准备**：环境全部就绪，卡在小车电池，未开跑。见「相机外参重标」节。
+3. **相机外参重标（Part 3）完成并部署**（`0846f7e`）：AprilTag 手眼标定 RMS 9.6mm，写 `camera_joint` + visual 偏移，重生成 ROS/Isaac URDF，Pi pull+build+restart，实时 TF 已验证。见下节。
 4. **文档清理**：`Gemini 2L → Gemini 2`（散文名 47 处；实机确认是 Gemini 2，非 2L）；2-DOF 云台移出文档（功能性 `/gimbal/cmd`·`Gimbal.msg` 保留，"云台舵机"改称通用 PWM 舵机）；CLAUDE.md 相机 TF 表旧值同步为 `0.061376`。删除 `TODO.md §4.7` 云台单目相机设想段。
 5. **Isaac Sim/Lab 导出**：新增 `isaac/`，见「Isaac 导出」节。
 
@@ -28,7 +28,11 @@
 
 坑（已修）：XML 注释里不能含 `--`，最初把 `--update-xacro` 写进注释导致 xacro 解析失败。
 
-## 相机外参重标（Part 3）—— 当前活跃线程，卡在电池
+## 相机外参重标（Part 3）—— ✅ 完成并部署（2026-07-24）
+
+**结果**：`camera_joint xyz=0.1017 0.0137 0.0535 / rpy=-0.0171 -0.1196 0.0323`（光学中心；z=0.0535 尺量固定），position-only RMS **9.6mm**，7 帧（3 弧站 ±11° + 4 直线站，窄空间用新增 `--far-dist 1.5`；±22° 在 0.9m 近距离 tag 转出视野被跳过）。`camera_link` visual/collision 偏移改 `-0.0407 -0.0124 0.0023` 把网格本体拉回 CAD 位（纯外观，与标定分离）。已写盘、重生成全部 ROS+Isaac URDF、提交 `0846f7e` 推送、Pi 部署（pull+build+`systemctl restart mentorpi-remote`），实时 TF 验证 `[0.102,0.014,0.053]` 一致。**注意**：camera_info 经 rosbridge QoS 不稳,用 `--intrinsics 518.6 518.6 317.2 236.2` 绕过。
+
+以下为执行记录（参数、坑，供追溯）：
 
 方法：`scripts/calibrate_camera_extrinsic.py`，dev 机经 rosbridge 驱动小车自动 AprilTag 手眼标定（arc 站定原地转 + line 直线基线求 yaw）。Part 1+2 里程计/IMU 已签核（base_link 运动可信，前提满足）。
 
@@ -105,7 +109,7 @@ node backend/server.mjs --host 0.0.0.0 --port 4178 \
 
 ## 仍遗留（实物/部署，多数需硬件）
 
-1. **相机外参重标**：上面的活跃线程，卡电池。完成并写盘 + Pi 部署后，本条关闭。
+1. **3D 地图重扫**（相机重标的后续）：新外参 z 从 0.095→0.0535（降 4.2cm，云台抬高没了），旧 `room_20260717.db` 相机偏高约 4cm → 点云整体偏高。切 `slam_3d` 新建 db 重扫（多角度多回环），GS 数据集导出同理需重来。
 2. **甲板干装**：四孔下方能否放垫圈/螺母、按底盘板厚+8mm 选 M4 螺丝长度、查线束干涉。
 3. **2S 电池托架**：实测中层甲板厚度和电池尺寸，更新 `battery_tray_2s.py` 的 `HOOK_THROAT`/`PACK_*`。
 4. **Pi 部署（SO-101）**：装 `ros-jazzy-laser-filters`，`with_so101:=true` 启动，验证 `/scan_raw → scan_mask → /scan` 的 ±24° 自体掩膜。
