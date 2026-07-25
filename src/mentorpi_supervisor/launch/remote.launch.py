@@ -2,7 +2,7 @@
 Remote operation entry point.
 
 Brings up:
-  - base.launch.py             (always-on hardware + Gemini 2L)
+  - base.launch.py             (always-on hardware + Gemini 2)
   - mentorpi_supervisor        (mode switcher: /mode/set, /mode/list_maps, /mode/status)
   - foxglove_bridge      :8765 (ws -- desktop Foxglove Studio clients)
   - rosbridge_websocket  :9090 (ws -- AIRE voice skill, live_rerun.py, mobile SPA)
@@ -53,10 +53,19 @@ def generate_launch_description():
         DeclareLaunchArgument('spa_port', default_value='8000',
             description='HTTP port serving the static SPA'),
 
+        # SO-101 机械臂物理安装后置 true (透传给 base.launch.py: 臂 TF 树 +
+        # 雷达后向自体掩膜)。systemd 部署改法: mentorpi-remote.service 的
+        # ExecStart 里给 remote.launch.py 加 with_so101:=true。
+        DeclareLaunchArgument('with_so101', default_value='false',
+            description='SO-101 arm installed (passed through to base.launch.py)'),
+
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(
                 os.path.join(bringup_dir, 'launch', 'base.launch.py')
             ),
+            launch_arguments={
+                'with_so101': LaunchConfiguration('with_so101'),
+            }.items(),
         ),
 
         Node(
@@ -102,6 +111,23 @@ def generate_launch_description():
                        '2.0', '/viewer/color_compressed'],
             # lazy: 没有查看端订阅 /viewer/color_compressed 时, 自动退订
             # 上游 —— 15fps 的 JPEG 编码链路整个休眠, 不白烧 CPU。
+            parameters=[{'lazy': True}],
+        ),
+
+        # 远程查看用的低频深度流 (2Hz)。为什么用 raw 而不是压缩流:
+        #   /camera/depth/image_raw/compressed     -> 只广播、发 0 字节
+        #       (compressed_image_transport 编不了 16UC1)
+        #   /camera/depth/image_raw/compressedDepth -> 数据有效, 但 PNG 前面有
+        #       12 字节 ROS ConfigHeader, Foxglove 解不了 -> 面板黑屏
+        # raw 16UC1 是 Foxglove 必定能渲染的格式(还能 hover 读出真实 mm 值)。
+        # 代价: 640x480x2B x 2Hz ≈ 10 Mbps —— 但 lazy 保证没人看时一点都不发。
+        Node(
+            package='topic_tools',
+            executable='throttle',
+            name='viewer_depth_throttle',
+            output='screen',
+            arguments=['messages', '/camera/depth/image_raw',
+                       '2.0', '/viewer/depth_raw'],
             parameters=[{'lazy': True}],
         ),
 

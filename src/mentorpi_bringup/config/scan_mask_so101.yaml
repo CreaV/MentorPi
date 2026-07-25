@@ -1,0 +1,33 @@
+# SO-101 装臂后的雷达自体掩膜 (laser_filters scan_to_scan_filter_chain)。
+#
+# 修正 direct-mount 雷达 TF 后，真实 SO-101 STL 与扫描平面 z=0.143001m
+# 的交线只落在 base/shoulder 两个 link；几何后向半宽 18.11°，加 5°
+# 安全余量并向上取整为 ±24° (0.418879 rad)。可复现计算见
+# mechanical/measurements/compute_scan_mask_so101.py。
+# InPlace 滤波把区间内的量测置为无效值, 点数/角度栅格不变。
+#
+# 角度是 LaserScan 自身角坐标(rad, x 前方=0)。驱动可能用 0..2π 或
+# -π..π 两种表示, 这里三段区间把"后向 ±0.418879 rad"都覆盖:
+# 落不到实际角度范围的区间不匹配任何点, 无害。装臂后用
+# `ros2 topic echo /scan_raw --field angle_min` 实测表示法, 可删掉
+# 用不上的段。
+scan_mask:
+  ros__parameters:
+    filter1:
+      name: rear_mask_low
+      type: laser_filters/LaserScanAngularBoundsFilterInPlace
+      params:
+        lower_angle: 2.722714  # π - 0.418879
+        upper_angle: 3.141593  # π
+    filter2:
+      name: rear_mask_high
+      type: laser_filters/LaserScanAngularBoundsFilterInPlace
+      params:
+        lower_angle: 3.141593  # π
+        upper_angle: 3.560472  # π + 0.418879 (0..2π 表示)
+    filter3:
+      name: rear_mask_wrap
+      type: laser_filters/LaserScanAngularBoundsFilterInPlace
+      params:
+        lower_angle: -3.141593  # -π (−π..π 表示)
+        upper_angle: -2.722714  # -π + 0.418879

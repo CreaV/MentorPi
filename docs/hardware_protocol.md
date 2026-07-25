@@ -40,7 +40,7 @@
 | 1 | LED | LED 控制 |
 | 2 | BUZZER | 蜂鸣器 |
 | 3 | MOTOR | 电机控制 |
-| 4 | PWM_SERVO | PWM 舵机（云台） |
+| 4 | PWM_SERVO | PWM 舵机 |
 | 5 | BUS_SERVO | 总线舵机 |
 | 6 | KEY | 按键 |
 | 7 | IMU | IMU 数据 |
@@ -177,7 +177,7 @@ ax, ay, az, gx, gy, gz = struct.unpack('<6f', data)  # data = 24 bytes
 
 ---
 
-## PWM 舵机/云台控制 (Function=4)
+## PWM 舵机控制 (Function=4)
 
 ### 数据格式
 
@@ -216,7 +216,7 @@ pulse = 500 + (angle / 180.0) * 2000
 
 ### 示例
 
-云台回中位（pitch=90°, yaw=90°），500ms 运动时间：
+舵机回中位（pitch=90°, yaw=90°），500ms 运动时间：
 
 ```python
 set_pwm_servo(ser, 500, [[1, 1500], [2, 1500]])
@@ -246,11 +246,11 @@ axes[7] = hat_y  D-pad Y
 | 左摇杆 Y (ly) | axes[1] | linear.x 前后 |
 | 左摇杆 X (lx) | axes[0] | linear.y 横移 |
 | 右摇杆 X (rx) | axes[2] | angular.z 旋转 |
-| RB + 右摇杆 X | axes[2] | 云台 yaw (按住RB时) |
-| RB + 右摇杆 Y | axes[3] | 云台 pitch (按住RB时) |
+| RB + 右摇杆 X | axes[2] | 舵机 yaw (按住RB时) |
+| RB + 右摇杆 Y | axes[3] | 舵机 pitch (按住RB时) |
 
 - 死区：0.1（低于此值视为零）
-- 按住 RB (buttons[7]) 切换右摇杆为云台控制，松开时云台自动回中
+- 按住 RB (buttons[7]) 切换右摇杆为舵机控制，松开时舵机自动回中
 
 ---
 
@@ -290,7 +290,7 @@ axes[7] = hat_y  D-pad Y
 | 话题 | `/scan` (sensor_msgs/LaserScan) |
 | QoS | Best Effort (SensorDataQoS) |
 | Frame ID | `laser_frame` |
-| TF | `base_link` → `laser_frame` (z=0.18m) |
+| TF | `base_link` → `laser_frame` (`xyz=-0.012242 0 0.092501`，直装) |
 
 ### 驱动来源与编译
 
@@ -361,7 +361,7 @@ ros2 launch mentorpi_bringup mapping.launch.py
 
 ```
 map → odom → base_link → laser_frame
-(slam_toolbox)  (base_node)   (静态, z=0.18m)
+(slam_toolbox)  (base_node)   (静态, xyz=-0.012242 0 0.092501m)
 ```
 
 ### 配置文件

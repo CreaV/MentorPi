@@ -1,6 +1,6 @@
 # MentorPi ROS 2 Workspace
 
-基于 **ROS 2 Jazzy** 的机器人控制系统，适配 MentorPi 硬件（树莓派 5 + RRCLite STM32 麦克纳姆轮底盘 + 2-DOF 云台 + MS200 激光雷达 + Orbbec Gemini 2L 深度相机）。
+基于 **ROS 2 Jazzy** 的机器人控制系统，适配 MentorPi 硬件（树莓派 5 + RRCLite STM32 麦克纳姆轮底盘 + MS200 激光雷达 + Orbbec Gemini 2 深度相机）。
 
 ---
 
@@ -19,10 +19,24 @@ source install/setup.bash
 
 | 模式 | 命令 | 说明 |
 |------|------|------|
+| **远程操作（生产入口）** | `ros2 launch mentorpi_supervisor remote.launch.py` | base 常驻 + foxglove_bridge + rosbridge + 手机 SPA + supervisor；之后用 `/mode/set` 服务在 `idle`/`slam_2d`/`slam_3d`/`loc_2d`/`loc_3d` 间热切换，不重启 base（开机自启见 `scripts/install-systemd.sh`） |
 | **基础遥控** | `ros2 launch mentorpi_bringup mentorpi.launch.py` | 底盘 + 手柄 + 2D 激光雷达 + IMU/EKF 融合 |
 | **2D 建图** | `ros2 launch mentorpi_bringup mapping.launch.py` | 基础遥控 + slam_toolbox 2D SLAM |
 | **2D 定位** | `ros2 launch mentorpi_bringup localization.launch.py` | 基础遥控 + 加载已有 2D 地图定位 |
-| **3D 建图** | `ros2 launch mentorpi_bringup rtabmap_mapping.launch.py` | EKF (轮速+IMU) 前端 + RTAB-Map (Gemini 2L RGB-D) 后端，异构架构 |
+| **3D 建图** | `ros2 launch mentorpi_bringup rtabmap_mapping.launch.py` | EKF (轮速+IMU) 前端 + RTAB-Map (Gemini 2 RGB-D) 后端，异构架构 |
+
+supervisor 模式切换示例（生产用法，地图文件按需替换）：
+
+```bash
+# 3D 建图到指定库（新文件名 = 新图；同名 = 增量续图，可加 load_all_nodes: true）
+ros2 service call /mode/set mentorpi_msgs/srv/SetMode \
+  "{mode: slam_3d, database_path: /home/pi/rtabmap_maps/room.db}"
+# 3D 定位（重启后恢复 map 系位姿）
+ros2 service call /mode/set mentorpi_msgs/srv/SetMode \
+  "{mode: loc_3d, database_path: /home/pi/rtabmap_maps/room.db}"
+# 停止 SLAM 回到纯遥控
+ros2 service call /mode/set mentorpi_msgs/srv/SetMode "{mode: idle}"
+```
 
 ### 依赖安装
 
@@ -55,7 +69,7 @@ sudo apt install ros-jazzy-rviz-imu-plugin
 │ 驱动层        mentorpi_base (串口)  oradar_lidar  orbbec_camera│
 ├────────────────────────────────────────────────────────────────┤
 │ 硬件层        RRCLite STM32 (电机+舵机+IMU)                    │
-│               MS200 激光雷达  Gemini 2L 深度相机                │
+│               MS200 激光雷达  Gemini 2 深度相机                │
 └────────────────────────────────────────────────────────────────┘
 ```
 
@@ -101,7 +115,7 @@ base_node ─→ /odom (50Hz, cmd_vel 积分) ─────┐
 **后端**（低频建图 + 周期性 loop closure）：
 
 ```
-Gemini 2L ─→ /camera/color/image_raw ────┐
+Gemini 2 ─→ /camera/color/image_raw ────┐
            → /camera/depth/image_raw ─────┤→ rtabmap (2Hz) ──→ TF: map → odom
            → /camera/color/camera_info ───┤    ↑               → /cloud_map (累积彩色点云)
                                           │    │               → /rtabmap/cloud (当前帧点云)
@@ -113,7 +127,7 @@ oradar_scan ─→ /scan (避障用，不参与 3D 建图)
 
 > **关键差别**（对比旧的纯视觉里程计设计）：
 > - **没有 `rgbd_odometry`**：机器人位姿来自 EKF 融合（轮速+STM32 IMU），~20ms 延迟，45Hz
-> - **没有相机 IMU**：Gemini 2L 内置 IMU 不参与（`enable_accel/gyro: false`）
+> - **没有相机 IMU**：Gemini 2 内置 IMU 不参与（`enable_accel/gyro: false`）
 > - **rtabmap 通过 TF 拿位姿**：`subscribe_odom_info: false`，从 TF 链 `odom → base_link` 读
 > - **轮速里程计漂移由 loop closure 校正**：rtabmap 在 `map → odom` 上发出修正
 
@@ -153,7 +167,7 @@ oradar_scan ─→ /scan (避障用，不参与 3D 建图)
 | `imu_filter_madgwick` | `imu_filter_madgwick_node` | IMU 姿态估计 | `apt: ros-jazzy-imu-filter-madgwick` |
 | `robot_localization` | `ekf_node` | 多源里程计融合 | `apt: ros-jazzy-robot-localization` |
 | `rtabmap_ros` | `rtabmap`, `point_cloud_xyzrgb` | 3D SLAM 后端 + 彩色点云 | `apt: ros-jazzy-rtabmap-ros` |
-| `orbbec_camera` | Gemini 2L 驱动 | 深度相机 | 已预装 |
+| `orbbec_camera` | Gemini 2 驱动 | 深度相机 | 已预装 |
 
 ### Launch 文件
 
@@ -162,7 +176,7 @@ oradar_scan ─→ /scan (避障用，不参与 3D 建图)
 | `mentorpi.launch.py` | base_node + STM32 IMU Madgwick + EKF + 相机 + 手柄 + 遥控 + 激光雷达 |
 | `mapping.launch.py` | mentorpi.launch.py + slam_toolbox 2D 建图 |
 | `localization.launch.py` | mentorpi.launch.py + slam_toolbox 定位模式 |
-| `rtabmap_mapping.launch.py` | base_node + STM32 IMU Madgwick + EKF + Gemini 2L (RGB-D only) + RTAB-Map（异构架构） |
+| `rtabmap_mapping.launch.py` | base_node + STM32 IMU Madgwick + EKF + Gemini 2 (RGB-D only) + RTAB-Map（异构架构） |
 
 ### 配置文件 (`src/mentorpi_bringup/config/`)
 
@@ -188,7 +202,7 @@ ros2 launch mentorpi_bringup mentorpi.launch.py camera_type:=gemini2l
 手柄操作：
 - **左摇杆**：前后 (ly→linear.x) / 横移 (lx→linear.y)
 - **右摇杆 X**：旋转 (angular.z)
-- **按住 RB + 右摇杆**：云台控制（松开 RB 自动回中）
+- **按住 RB + 右摇杆**：PWM 舵机控制（松开 RB 自动回中）
 - 死区：0.1
 
 ### 2D 建图 (slam_toolbox)
@@ -216,7 +230,7 @@ ros2 launch mentorpi_bringup localization.launch.py
 ros2 launch mentorpi_bringup localization.launch.py map_file:=/home/pi/maps/kitchen
 ```
 
-### 3D 建图 (RTAB-Map + Gemini 2L)
+### 3D 建图 (RTAB-Map + Gemini 2)
 
 ```bash
 # 创建地图存储目录
@@ -257,6 +271,51 @@ rviz2
 
 Fixed Frame 设为 `map`（建图/定位时）或 `odom`（无 SLAM 时）。
 
+### 3D 查看方式一览
+
+| 方式 | 客户端 | 连接 | 特点 |
+|------|--------|------|------|
+| **Foxglove Studio** | 桌面 app | `ws://<robot-ip>:8765` | 日常主力；导入 `src/mentorpi_supervisor/foxglove_layout/mentorpi.json` 布局；图像面板务必订 `/camera/color/image_raw/compressed` |
+| **手机 SPA** | 手机/平板浏览器 | `http://<robot-ip>:8000/` | 虚拟摇杆遥控 + MJPEG 视频 + 模式切换，无外网可用 |
+| **RViz2** | 远程 PC | DDS 直连 | 见上节配置表 |
+| **Rerun (live_rerun.py)** | 查看端 PC / 手机 | foxglove :8765（默认）或 rosbridge :9090 | 3DGS splat / SLAM 点云 + 实时机器人位姿 + 相机视锥 + 视频，Pi 零负担 |
+
+```bash
+# dev 机（venv 需 rerun + rosbags + websockets + numpy）：
+python scripts/live_rerun.py --robot <robot-ip> \
+    --cloud gs_work/gs_dataset_xxx/sparse_pc.ply      # 点云版
+python scripts/live_rerun.py --robot <robot-ip> \
+    --splat gs_work/exports/splat/splat.ply           # 3DGS 版
+# 加 --serve 可用手机浏览器打开（URL 里的 + 要编码为 %2B）
+```
+
+机器人切 `loc_3d` 模式后，rtabmap 重定位发布 `map→odom`，Rerun 里的机器人会出现在 splat/点云场景中的真实位置。
+
+### 3D 重构：高斯泼溅 (3DGS) 管线
+
+完整文档见 **`docs/gaussian_splatting.md`**。四步走，坐标系全程锁定 ROS `map` 系（训练出的 splat 与 SLAM 地图天然对齐，重定位即可把机器人"放进"场景）：
+
+```bash
+# 1. 建图（机器人上，slam_3d 模式慢速多角度扫，db 自动落盘）
+
+# 2. 导出 nerfstudio 数据集（dev 机，需 ros-jazzy-rtabmap 的 rtabmap-export）
+python3 scripts/export_gs_dataset.py <path>/room.db --output-dir gs_work/gs_dataset_room
+#    产物：transforms.json（回环优化后位姿）+ images/ + depth/ + sparse_pc.ply（种子点云）
+
+# 3. 训练 splatfacto（nerfstudio 环境；三个 flag 缺一不可——保持 map 坐标系）
+ns-train splatfacto --data gs_work/gs_dataset_room \
+    --viewer.quit-on-train-completion True \
+    nerfstudio-data --orientation-method none --center-method none --auto-scale-poses False
+
+# 4. 导出 splat.ply 并查看
+TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1 ns-export gaussian-splat \
+    --load-config outputs/gs_dataset_room/splatfacto/<timestamp>/config.yml \
+    --output-dir exports/splat/
+python scripts/live_rerun.py --robot <robot-ip> --splat exports/splat/splat.ply
+```
+
+注意：相机外参重标后旧 db 的几何随之失效，重训 splat 应使用**新外参重扫的库**（换新 db 文件名，别在旧库上增量）。离线调试可用 `scripts/bag_to_rerun.py` 回放 bag。
+
 ---
 
 ## 硬件说明
@@ -268,7 +327,7 @@ Fixed Frame 设为 `map`（建图/定位时）或 `odom`（无 SLAM 时）。
 | 功能码 | 名称 | 方向 | 说明 |
 |--------|------|------|------|
 | 3 | MOTOR | 发送 | 电机速度控制（float32 rps） |
-| 4 | PWM_SERVO | 发送 | 云台舵机（uint16 脉宽 500-2500μs） |
+| 4 | PWM_SERVO | 发送 | PWM 舵机（uint16 脉宽 500-2500μs） |
 | 7 | IMU | 接收 | 6×float32：ax,ay,az (g) + gx,gy,gz (deg/s) |
 
 - **设备**：`/dev/ttyACM0` @ 1,000,000 baud
@@ -281,19 +340,22 @@ Fixed Frame 设为 `map`（建图/定位时）或 `odom`（无 SLAM 时）。
 
 ### 底盘参数
 
-| 参数 | 值 |
-|------|-----|
-| 前后轴距 (wheelbase) | 0.1368 m |
-| 左右轴距 (track_width) | 0.1410 m |
-| 轮径 (wheel_diameter) | 0.065 m |
+| 参数 | 物理尺寸 | 代码用值（标定后） |
+|------|---------|------------------|
+| 前后轴距 (wheelbase) | 0.1368 m | **0.1528 m**（2026-07-16 对墙旋转标定，有效几何含麦轮原地旋转打滑） |
+| 左右轴距 (track_width) | 0.1410 m | **0.1575 m**（同上） |
+| 轮径 (wheel_diameter) | 0.065 m（标称） | **0.0636 m**（2026-07-05 卷尺标定） |
+| 陀螺 z 刻度 (gyro_scale_z) | — | **0.9930**（2026-07-16） |
+
+标定值在 `mentorpi_base/base_node.py` 与 `mentorpi_description/urdf/mecanum.xacro` 中**必须保持同步**；标定方法见 `docs/calibration.md` 与 `docs/calibration_handoff.md`。
 
 ### 设备列表
 
 | 设备 | 端口 | 波特率 | 说明 |
 |------|------|--------|------|
-| RRCLite STM32 | `/dev/ttyACM0` | 1,000,000 | 底盘+云台+IMU |
+| RRCLite STM32 | `/dev/ttyACM0` | 1,000,000 | 底盘+舵机+IMU |
 | MS200 激光雷达 | `/dev/ttyUSB0` | 230,400 | CH340 转换器 |
-| Gemini 2L 深度相机 | USB | — | RGB-D + 内置 IMU |
+| Gemini 2 深度相机 | USB | — | RGB-D + 内置 IMU |
 | 北通手柄 (BTP-KP20D) | USB 无线 | — | 2.4G dongle |
 
 ### 已知问题
@@ -302,12 +364,12 @@ Fixed Frame 设为 `map`（建图/定位时）或 `odom`（无 SLAM 时）。
 - `oradar_scan` 节点 Ctrl+C 可能无法干净退出，用 `pkill -9 -f oradar_scan`
 - 跨网络 RViz2 看不到数据时，两端都设置 `export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp`
 - RTAB-Map 在低纹理环境（白墙、纯色地面）loop closure 检测会失败，机器人位姿改靠纯 dead-reckoning（轮速+IMU），漂移会累积直到回到有特征区域才被校正
-- Gemini 2L **必须插 USB 3.0 蓝口** + USB-C 3.0 线，USB 2.0 会导致 `color frame is not decoded` 和频繁断连
+- Gemini 2 **必须插 USB 3.0 蓝口** + USB-C 3.0 线，USB 2.0 会导致 `color frame is not decoded` 和频繁断连
 - 重复启动 launch 后，老进程可能残留持有 USB 设备导致相机初始化失败；用 `usbreset 2bc5:0670` 重置相机
 
-### Gemini 2L 稳定性配置
+### Gemini 2 稳定性配置
 
-Pi 5 高负载时 USB 控制器对电压敏感，Gemini 2L 的 IR 投射器上电瞬态容易导致掉线。建议：
+Pi 5 高负载时 USB 控制器对电压敏感，Gemini 2 的 IR 投射器上电瞬态容易导致掉线。建议：
 
 1. **EEPROM 允许 5A 输出**
    ```bash
@@ -337,7 +399,7 @@ Pi 5 高负载时 USB 控制器对电压敏感，Gemini 2L 的 IR 投射器上�
 
 3D 模式下经过下面这些优化，新架构在 Pi 5 上可达：**机器人 pose 延迟 ~20ms / 45Hz**，rtabmap 建图 2Hz，核心 CPU 占用约 75%（4 核共 400%）。
 
-Gemini 2L launch 参数：
+Gemini 2 launch 参数：
 
 | 参数 | 值 | 说明 |
 |------|-----|------|
@@ -362,9 +424,19 @@ rtabmap 节点：`subscribe_odom_info: false`，`Rtabmap/DetectionRate: 2.0`，`
 
 ### AI 视觉
 
-1. 订阅 `/camera/color/image_raw`（Gemini 2L）或 `/camera/image_raw`（OpenCV）
-2. 处理后发布 `/gimbal/cmd`（`mentorpi_msgs/Gimbal`）实现自动跟随
-3. 或发布 `/cmd_vel` 实现视觉导航
+1. 订阅 `/camera/color/image_raw`（Gemini 2）或 `/camera/image_raw`（OpenCV）
+2. 或发布 `/cmd_vel` 实现视觉导航
+
+### Isaac Sim / Isaac Lab 仿真
+
+`isaac/` 目录提供可直接导入的机器人描述，**与标定/URDF 一键绑定**（由
+`isaac/export_isaac.sh` 从 `mecanum.xacro` 重新生成，相机重标后跑一次即同步）：
+
+- `isaac/mentorpi.isaac.urdf` — 底盘 + 相机 + 激光雷达（无臂）
+- `isaac/mentorpi_so101.isaac.urdf` — 整机（含 SO-101 臂）
+- `isaac/mentorpi_articulation_cfg.py` — Isaac Lab `ArticulationCfg`
+
+导入步骤、URDF→USD 转换、麦轮滚子不被 Isaac 模拟的注意事项见 **`isaac/README.md`**。
 
 ---
 
@@ -372,4 +444,7 @@ rtabmap 节点：`subscribe_odom_info: false`，`Rtabmap/DetectionRate: 2.0`，`
 
 - **官方 SDK**：`/home/pi/workdir/mentorpi/src/`（协议参考，勿修改）
 - **硬件协议详情**：`docs/hardware_protocol.md`
+- **高斯泼溅 3D 重构管线**：`docs/gaussian_splatting.md`
+- **标定总计划 / 实车标定手册**：`docs/calibration.md` / `docs/calibration_handoff.md`
+- **供电排障**：`docs/power_troubleshooting.md`
 - **Claude Code 开发指引**：`CLAUDE.md`

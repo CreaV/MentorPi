@@ -127,7 +127,7 @@ NVIDIA Alpamayo(-R1) 是**自动驾驶** VLA：输入多路车规相机+自车�
     与 Feetech STS3215 协议不兼容；
   - lerobot 的采数据/回放/推理栈原生走 USB-TTL 适配器直连 Feetech 总线
     （`FeetechMotorsBus`），走 STM32 = 自研固件透传 + 断掉整个生态；
-  - 分工：STM32 继续管底盘电机/云台/蜂鸣器；臂走
+  - 分工：STM32 继续管底盘电机/舵机/蜂鸣器；臂走
     **Feetech USB 适配器 → Pi USB 口**，软件即插即用。
 - 舵机内置编码器+位置控制，"控制算法"就是 lerobot 侧 30-50Hz 位置流 +
   软件限位/限流，无需自己写伺服环。
@@ -148,8 +148,26 @@ NVIDIA Alpamayo(-R1) 是**自动驾驶** VLA：输入多路车规相机+自车�
 - **翻覆是主要风险**：底盘轮距仅 13.7×14.1cm，SO-101 臂展 ~35cm、
   自重 ~1kg。对策：臂座靠底盘几何中心偏后、电池前移配重、软件限制
   工作空间（限位 + 满伸展降速）、抓取时底盘锁死（cmd_vel 抑制）。
-- 相机视野：检查臂 home 位不挡云台相机；操作任务建议臂上加一个
+- 相机视野：检查臂 home 位不挡机身相机；操作任务建议臂上加一个
   腕部相机（lerobot 常规配置，USB 直连 Pi）。
+
+### 机械数模、打印件与 URDF 回归
+
+- 建立 `mechanical/` 目录作为机械设计源，保存原生参数化 CAD/STEP、实测尺寸、
+  装配基准和版本说明；现有 STL 只作为外形参考，不反向当作精确参数化模型。
+- 优先获取 Gemini 2、MS200、SO-101、电池、麦克风和 USB Hub 的厂商 STEP；
+  缺失时按实物重建安装面、孔位和包络，先校验 STL 比例与关键尺寸。
+- 建立整机 CAD 装配：底盘基准 → 安装孔 → 支架 → 外挂件；视觉标定得到的
+  光学坐标外参不能替代机械孔位和安装面尺寸。
+- 打印件以原生 CAD 为源，输出 3MF/STL，并记录材料、方向、壁厚、填充率、
+  热熔螺母和公差；装配后进行干涉、线束、视野、重心和翻覆检查。
+- CAD 定型后导出简化 visual mesh 和独立 collision mesh，加入模块化 xacro；
+  实测质量、质心和必要的惯量后再用于 MoveIt、MuJoCo、Gazebo/Isaac 仿真。
+- 推荐目录：
+  `mechanical/assemblies`、`mechanical/references`、
+  `mechanical/accessories`、`mechanical/printable`、
+  `mechanical/measurements`。STEP/原生 CAD 是机械源，xacro 是 ROS
+  结构与运动学源，两者通过明确命名的安装基准同步。
 
 ### 供电与线束
 
@@ -172,7 +190,7 @@ NVIDIA Alpamayo(-R1) 是**自动驾驶** VLA：输入多路车规相机+自车�
    遥操作。
 3. URDF 合并 + TF：so101.xacro 挂 base_link，joint_states 桥接
    （lerobot 读的位置 → `/joint_states` → robot_state_publisher）。
-4. 数据采集：腕部相机 + 云台相机双视角，每任务 50-200 episodes
+4. 数据采集：腕部相机 + 机身相机双视角，每任务 50-200 episodes
    （lerobot 格式）。
 5. 策略训练（内网 GPU）：先 ACT（小、稳、可在 Pi 上 ONNX 30Hz 推理），
    再 SmolVLA/pi0 微调（服务器推理 + action chunk 下发）。

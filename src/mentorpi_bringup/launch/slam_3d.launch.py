@@ -1,6 +1,6 @@
 """
 3D SLAM mode-only launch. Adds rtabmap + colored point cloud on top of the
-already-running base (which provides EKF odom and the Gemini 2L RGB-D
+already-running base (which provides EKF odom and the Gemini 2 RGB-D
 streams). Started/stopped by mentorpi_supervisor.
 
 Heterogeneous architecture: rtabmap reads odom from TF (odom->base_link by

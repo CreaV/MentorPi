@@ -12,7 +12,8 @@ Procedure (all automatic over rosbridge):
      (EKF odom pose, camera frame, PnP tag pose) standing still
   3. solve: least-squares over T_base_cam (z FIXED to the ruler-measured
      height — planar robot motion cannot observe it) and T_odom_tag
-  4. print the base_link -> camera_link translation+RPY for base.launch.py
+  4. print the base_link -> camera_link translation+RPY for camera_joint
+  5. optionally update mecanum.xacro atomically with --update-xacro
 
 Run (dev machine, aire-venv has pupil_apriltags/scipy/websockets):
   python scripts/calibrate_camera_extrinsic.py ws://192.168.8.117:9090 \
@@ -30,13 +31,17 @@ import base64
 import io
 import json
 import math
+import re
 import sys
+import xml.etree.ElementTree as ET
 import time
 from pathlib import Path
 
 import numpy as np
 
 AIRE_PATH_DEFAULT = "/media/luo/Game/data/code/AIRE"
+DEFAULT_XACRO = (Path(__file__).resolve().parents[1] /
+                 "src/mentorpi_description/urdf/mecanum.xacro")
 
 
 # ---------- SE(3) helpers ----------
@@ -213,7 +218,7 @@ async def capture(robot, det, out: Path, records: list, note: str):
 
 
 async def collect(url: str, aire_path: str, tag_size: float, out: Path,
-                  intrinsics=None):
+                  intrinsics=None, far_dist: float = 1.6, near_dist: float = 1.0):
     robot = Robot(url, aire_path)
     if intrinsics is not None:
         fx, fy, cx, cy = intrinsics
@@ -288,9 +293,9 @@ async def collect(url: str, aire_path: str, tag_size: float, out: Path,
         return None if r is None else float(np.linalg.norm(np.array(r[0])[:3, 3]))
 
     await station("S0 arc")
-    # 后退拉大基线到 ~1.6m (或被守卫/失检拦住)
+    # 后退拉大基线到 far_dist (或被守卫/失检拦住)
     d = await tag_dist()
-    while d is not None and d < 1.6:
+    while d is not None and d < far_dist:
         if not await robot.move("backward", 0.25):
             print(f"  rear blocked at tag dist {d:.2f}m")
             break
@@ -302,7 +307,7 @@ async def collect(url: str, aire_path: str, tag_size: float, out: Path,
         if d is None:
             print("  line: tag lost, stopping")
             break
-        if d < 1.0:  # 站位下限: 下一步后仍 >0.75m
+        if d < near_dist:  # 站位下限: 下一步后仍 >0.75m
             print(f"  line: reached closest station (tag {d:.2f}m)")
             break
         if not await robot.move("forward", 0.25):
@@ -397,8 +402,8 @@ def solve_v3(out: Path, cam_z: float):
     res = residuals(sol.x).reshape(len(records), 3)
     t_rms = float(np.sqrt((res ** 2).sum(1).mean())) * 1000
     print(f"residual RMS: {t_rms:.1f} mm (position-only)")
-    _print_extrinsic(T_bc)
-    return t_rms
+    extrinsic = _print_extrinsic(T_bc)
+    return t_rms, None, extrinsic
 
 
 def _print_extrinsic(T_bc):
@@ -408,13 +413,14 @@ def _print_extrinsic(T_bc):
     x, y, z = T_bl[:3, 3]
     roll, pitch, yaw = mat_to_rpy(T_bl)
     print("\n=== base_link -> camera_link ===")
-    print(f"translation: x={x:.4f} y={y:.4f} z={z:.4f}  (old: 0.143 0 0.095)")
+    print(f"translation: x={x:.4f} y={y:.4f} z={z:.4f}")
     print(f"rpy (rad):   roll={roll:.4f} pitch={pitch:.4f} yaw={yaw:.4f}")
     print(f"rpy (deg):   roll={math.degrees(roll):.2f} "
           f"pitch={math.degrees(pitch):.2f} yaw={math.degrees(yaw):.2f}")
-    print("\nbase.launch.py static_transform_publisher arguments (x y z yaw pitch roll):")
-    print(f"  ['{x:.4f}', '{y:.4f}', '{z:.4f}', "
-          f"'{yaw:.4f}', '{pitch:.4f}', '{roll:.4f}', 'base_link', 'camera_link']")
+    print("\nmecanum.xacro camera_joint:")
+    print(f"  <origin xyz=\"{x:.4f} {y:.4f} {z:.4f}\" "
+          f"rpy=\"{roll:.4f} {pitch:.4f} {yaw:.4f}\"/>")
+    return tuple(float(v) for v in (x, y, z, roll, pitch, yaw))
 
 
 def solve(out: Path, cam_z: float, trust_odom: bool = False):
@@ -489,21 +495,52 @@ def solve(out: Path, cam_z: float, trust_odom: bool = False):
     r_rms = float(np.degrees(np.sqrt((res[:, 3:] ** 2).sum(1).mean()) / 0.1))
     print(f"residual RMS: {t_rms:.1f} mm / {r_rms:.2f}°")
 
-    # base -> optical  =>  base -> camera_link (undo the optical convention)
-    T_opt_link = np.eye(4)
-    T_opt_link[:3, :3] = np.linalg.inv(M_LINK_FROM_OPT)
-    T_bl = T_bc @ T_opt_link
-    x, y, z = T_bl[:3, 3]
-    roll, pitch, yaw = mat_to_rpy(T_bl)
-    print("\n=== base_link -> camera_link ===")
-    print(f"translation: x={x:.4f} y={y:.4f} z={z:.4f}  (old: 0.143 0 0.095)")
-    print(f"rpy (rad):   roll={roll:.4f} pitch={pitch:.4f} yaw={yaw:.4f}")
-    print(f"rpy (deg):   roll={math.degrees(roll):.2f} "
-          f"pitch={math.degrees(pitch):.2f} yaw={math.degrees(yaw):.2f}")
-    print("\nbase.launch.py static_transform_publisher arguments (x y z yaw pitch roll):")
-    print(f"  ['{x:.4f}', '{y:.4f}', '{z:.4f}', "
-          f"'{yaw:.4f}', '{pitch:.4f}', '{roll:.4f}', 'base_link', 'camera_link']")
-    return t_rms, r_rms
+    extrinsic = _print_extrinsic(T_bc)
+    return t_rms, r_rms, extrinsic
+
+
+def update_camera_joint(xacro_path: Path, extrinsic: tuple) -> None:
+    """Atomically replace only camera_joint origin in the xacro."""
+    x, y, z, roll, pitch, yaw = extrinsic
+    text = xacro_path.read_text()
+    joint_re = re.compile(
+        r'(<joint name="camera_joint" type="fixed">.*?'
+        r'<origin xyz=")[^"]+(" rpy=")[^"]+("/>.*?</joint>)',
+        re.DOTALL,
+    )
+    replacement = (
+        rf'\g<1>{x:.4f} {y:.4f} {z:.4f}'
+        rf'\g<2>{roll:.4f} {pitch:.4f} {yaw:.4f}\g<3>'
+    )
+    updated, count = joint_re.subn(replacement, text)
+    if count != 1:
+        raise RuntimeError(
+            f"expected exactly one camera_joint origin in {xacro_path}; "
+            f"found {count}"
+        )
+    # keep the provenance comment's date current if present
+    updated = re.sub(
+        r"(AprilTag hand-eye calibration, )\d{4}-\d{2}-\d{2}",
+        rf"\g<1>{time.strftime('%Y-%m-%d')}",
+        updated, count=1,
+    )
+    ET.fromstring(updated)
+    tmp = xacro_path.with_suffix(xacro_path.suffix + ".tmp")
+    tmp.write_text(updated)
+    tmp.replace(xacro_path)
+    print(f"updated {xacro_path}")
+
+
+def apply_result(result, args) -> None:
+    if result is None or not args.update_xacro:
+        return
+    t_rms, _r_rms, extrinsic = result
+    if t_rms > args.max_update_rms_mm:
+        raise RuntimeError(
+            f"refusing xacro update: residual {t_rms:.1f} mm exceeds "
+            f"--max-update-rms-mm={args.max_update_rms_mm:.1f}"
+        )
+    update_camera_joint(args.xacro_path, extrinsic)
 
 
 def main():
@@ -514,7 +551,17 @@ def main():
     ap.add_argument("--cam-z", type=float, default=0.095,
                     help="ruler-measured camera height above base_link (m)")
     ap.add_argument("--out", default="/tmp/calib_run")
+    ap.add_argument("--far-dist", type=float, default=1.6,
+                    help="line-station far tag distance (m); lower for tight rooms")
+    ap.add_argument("--near-dist", type=float, default=1.0,
+                    help="closest line-station tag distance (m); never below tablet safety")
     ap.add_argument("--solve-only", metavar="DIR")
+    ap.add_argument("--update-xacro", action="store_true",
+                    help="atomically update camera_joint after a good solve")
+    ap.add_argument("--xacro-path", type=Path, default=DEFAULT_XACRO,
+                    help="xacro to update (default: repository mecanum.xacro)")
+    ap.add_argument("--max-update-rms-mm", type=float, default=20.0,
+                    help="refuse --update-xacro above this position RMS")
     ap.add_argument("--trust-odom", action="store_true",
                     help="trust odom station positions (forward-line pattern)")
     ap.add_argument("--aire-path", default=AIRE_PATH_DEFAULT)
@@ -524,15 +571,18 @@ def main():
     args = ap.parse_args()
 
     if args.solve_only:
-        solve(Path(args.solve_only), args.cam_z, args.trust_odom)
+        result = solve(Path(args.solve_only), args.cam_z, args.trust_odom)
+        apply_result(result, args)
         return
     if not args.url:
         ap.error("url required unless --solve-only")
     out = Path(args.out)
     ok = asyncio.run(collect(args.url, args.aire_path, args.tag_size, out,
-                             intrinsics=args.intrinsics))
+                             intrinsics=args.intrinsics,
+                             far_dist=args.far_dist, near_dist=args.near_dist))
     if ok:
-        solve(out, args.cam_z, trust_odom=True)
+        result = solve(out, args.cam_z, trust_odom=True)
+        apply_result(result, args)
     else:
         print("collection incomplete; fix setup and rerun "
               f"(or --solve-only {out} if enough poses)")

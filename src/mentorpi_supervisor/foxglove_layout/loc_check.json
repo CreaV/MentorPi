@@ -45,6 +45,18 @@
       "flipVertical": false,
       "rotation": 0
     },
+    "Image!depth": {
+      "cameraState": {},
+      "topic": "/viewer/depth_raw",
+      "transformMarkers": false,
+      "synchronize": false,
+      "smooth": false,
+      "flipHorizontal": false,
+      "flipVertical": false,
+      "rotation": 0,
+      "minValue": 300,
+      "maxValue": 4000
+    },
     "Indicator!mode": {
       "path": "/mode/status.data",
       "style": "background",
@@ -96,7 +108,12 @@
     "first": "3D!loccheck",
     "second": {
       "first": {
-        "first": "Image!cam",
+        "first": {
+          "first": "Image!cam",
+          "second": "Image!depth",
+          "direction": "column",
+          "splitPercentage": 50
+        },
         "second": {
           "first": "Indicator!mode",
           "second": "Gauge!battery",
@@ -104,7 +121,7 @@
           "splitPercentage": 60
         },
         "direction": "column",
-        "splitPercentage": 55
+        "splitPercentage": 72
       },
       "second": {
         "first": {

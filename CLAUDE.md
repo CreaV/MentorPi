@@ -4,7 +4,50 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-A ROS 2 Jazzy workspace for the MentorPi robot — a Raspberry Pi 5 + RRCLite STM32 mecanum-wheel car with a 2-DOF camera gimbal, MS200 lidar, and Orbbec Gemini 2L depth camera. The workspace lives at `/home/pi/workdir/mentorpi/mentorpi_ws/`.
+A ROS 2 Jazzy workspace for the MentorPi robot — a Raspberry Pi 5 + RRCLite STM32 mecanum-wheel car with an MS200 lidar, an Orbbec Gemini 2 depth camera, and an optional LeRobot SO-101 arm. The camera is direct-mounted to the base; its extrinsic is pending recalibration after the mount changed. The deployed workspace lives at `/home/pi/workdir/mentorpi/mentorpi_ws/`.
+
+## Session Continuation & Handoff Protocol
+
+`docs/handoff.md` is the repository-wide rolling handoff for the current agent session. It is not tied to SO-101 or any feature. Every agent and every task uses the same file.
+
+At the start of a continuation:
+
+1. Run `git status --short --branch` and `git log -5 --oneline --decorate` before editing.
+2. Read `docs/handoff.md`, then inspect the source files directly relevant to the current request.
+3. Classify every dirty file as user-owned, prior-agent work, or current-task work. Preserve user-owned changes and never stage, overwrite, or revert them without explicit instruction.
+4. Treat the handoff as orientation, not proof. If it conflicts with current source, Git state, or reproducible validation, those sources win.
+
+Before ending any agent session, or whenever the user asks to stop, close, compact, or hand work to another agent, rewrite `docs/handoff.md`. Do this even if the user did not separately ask for documentation.
+
+Use the model's built-in compact/conversation-summary capability as drafting input when useful: compress the full conversation into decisions, actions, evidence, and open work. Do not paste a raw transcript or an unverified compact summary. Re-check Git status, recent commits, changed files, tests, and current source before writing.
+
+The handoff should be concise and contain:
+
+1. What this session was trying to accomplish.
+2. What was actually changed or decided, including important user-provided facts.
+3. Commits created, push state, and current branch.
+4. Validation that actually ran and its result; distinguish unrun checks.
+5. What remains, why it remains, who/what blocks it, and the exact next action.
+6. Current working-tree state, especially user-owned or unrelated dirty files.
+7. Only the key files and commands needed to resume efficiently.
+
+Handoff quality rules:
+
+- Rewrite the file for the current session; do not append correction banners or preserve a chronological chat log.
+- Lead with the current state and remaining work. Keep historical detail only when it explains a decision that would otherwise be reversed.
+- Separate facts by authority: user-confirmed physical facts > deterministic measurements/tests > clearly labeled assumptions.
+- Never claim a test, build, deployment, commit, or push happened unless it actually did.
+- If several independent task threads remain, list each with its own status and next action.
+- A handoff update is documentation, not permission to stage, commit, push, deploy, or modify unrelated files.
+
+Task-specific source-of-truth rules still apply. For mechanical/URDF work:
+
+- Edit xacro/Python CAD/config generators first; regenerate STEP/STL/URDF/GLB and package copies, then validate. Do not patch generated artifacts as the source of truth.
+- Calibration and appearance are separate. Never change a TF calibration merely to make a render look centered.
+- Top-level xacro can resolve the installed `mentorpi_description`; rebuild/source it before final generation or deliberately use the direct source while diagnosing.
+- Keep printable CAD and xacro placement synchronized; copy regenerated STL into `src/mentorpi_description/meshes/accessories/`.
+- CAD inspection requires deterministic geometry facts plus a reviewed snapshot.
+- three.js-family URDF viewers can scatter fixed-joint subtrees; use `mechanical/urdf/bake_urdf_glb.py` for reliable whole-robot visual review.
 
 ## Build & Run
 
@@ -46,7 +89,7 @@ The system has two SLAM modes: **2D** (slam_toolbox + lidar) and **3D** (RTAB-Ma
                         │                                             │
 joy_node → /joy → teleop_node → /cmd_vel ──→ base_node ─→ Serial ──→ RRCLite STM32
                                → /gimbal/cmd ─┘    │                  ├─ 4x mecanum motors
-                                                    │                  └─ 2x gimbal servos
+                                                    │                  └─ 2x PWM servos
                                                     │
                                                     ├─→ /odom (50Hz, dead-reckoning)
                                                     └─→ /imu/data_raw (STM32 IMU)
@@ -84,7 +127,7 @@ base_node ─→ /odom (50Hz, cmd_vel 积分) ─────┐
 **后端**(低频建图 + 周期性 loop closure)：
 
 ```
-Gemini 2L ─→ /camera/color/image_raw ────┐
+Gemini 2 ─→ /camera/color/image_raw ────┐
            → /camera/depth/image_raw ─────┤→ rtabmap (2Hz) ──→ TF: map → odom
            → /camera/color/camera_info ───┤    ↑               → /cloud_map (累积点云)
                                           │    │               → /map (2D 栅格)
@@ -96,7 +139,7 @@ oradar_scan ─→ /scan (避障用，不参与 3D 建图)
 
 **关键差别(对比旧的纯视觉里程计设计)：**
 - **没有 `rgbd_odometry`**：机器人位姿来自 EKF 融合的轮速 + STM32 IMU,~20ms 延迟,45Hz
-- **没有相机 IMU**：`enable_accel/gyro: false`,Gemini 2L IMU 不参与
+- **没有相机 IMU**：`enable_accel/gyro: false`,Gemini 2 IMU 不参与
 - **rtabmap 通过 TF 拿位姿**：`subscribe_odom_info: false`,自动从 TF 链 `odom → base_link` 读
 - **轮速里程计漂移由 loop closure 校正**：rtabmap 在 `map → odom` 上发出修正
 
@@ -107,7 +150,7 @@ oradar_scan ─→ /scan (避障用，不参与 3D 建图)
 **2D SLAM:**
 ```
 map → odom → base_link → laser_frame
-(slam_toolbox) (EKF)     (static, z=0.18m)
+(slam_toolbox) (EKF)     (static, xyz=-0.012242 0 0.092501)
 ```
 
 **3D SLAM(异构架构):**
@@ -115,12 +158,12 @@ map → odom → base_link → laser_frame
 map → odom → base_link → camera_link → camera_*_optical_frame
 (rtabmap) (EKF)        (static)        (orbbec driver)
                        → laser_frame
-                         (static, z=0.18m)
+                         (static, xyz=-0.012242 0 0.092501)
 ```
 
-**相机-底盘标定**:`base_link → camera_link` 静态 TF 在 `base.launch.py` 里手填(默认 x=0.05, z=0.15, 无旋转,**只是估计值,需用尺子量后校准**)。如果相机有俯仰角(如低头看地面),记得填 RPY 的 pitch(弧度制)。
+**固定 TF 的源头是 URDF**：`base_link → imu_link/camera_link/laser_frame` 由 `mentorpi_description/urdf/mecanum.xacro` 定义，`base.launch.py` 的 robot_state_publisher 以 `runtime_mode:=true` 渲染发布。雷达和相机都是直装变换；`camera_joint` 现为从 pre_calibration 恢复的 vendor CAD 直装值（实装可能有位移），最终固定后须重做 AprilTag 标定精化。轮子是 continuous joint，由 joint_state_publisher 发零位 `/joint_states` 补齐 TF（无编码器）。
 
-**相机生命周期**:Gemini 2L 在 `base.launch.py` 里**常驻**(15fps RGB-D),`/camera/color/image_raw` 始终可订,跨模式切换不重启相机。`slam_3d` 模式只在已运行的相机流上加 rtabmap + 点云;2D / loc / idle 模式也能直接用相机预览(虽然没用到 depth)。永久代价:相机 driver ~15-20% CPU on Pi 5。
+**相机生命周期**:Gemini 2 在 `base.launch.py` 里**常驻**(15fps RGB-D),`/camera/color/image_raw` 始终可订,跨模式切换不重启相机。`slam_3d` 模式只在已运行的相机流上加 rtabmap + 点云;2D / loc / idle 模式也能直接用相机预览(虽然没用到 depth)。永久代价:相机 driver ~15-20% CPU on Pi 5。
 
 ## Packages
 
@@ -131,6 +174,7 @@ map → odom → base_link → camera_link → camera_*_optical_frame
 | `mentorpi_motion` | Python | `motion_node` | 有界运动原语 action server（语音/VLA/agent 的执行底座，base.launch 常驻） |
 | `mentorpi_teleop` | Python | `teleop_node` | Joystick mapping |
 | `mentorpi_bringup` | Python | — | Launch files and config (see below) |
+| `mentorpi_description` | Python | — | URDF/xacro + STL meshes;`runtime_mode` arg 区分真机 TF 模型与离线完整模型 |
 | `mentorpi_supervisor` | Python | `supervisor_node` | Mode switcher; subprocess-launches slam_2d/slam_3d/loc_2d on request |
 | `oradar_lidar` | C++ (ament_cmake) | `oradar_scan` | MS200 lidar driver |
 
@@ -142,7 +186,7 @@ map → odom → base_link → camera_link → camera_*_optical_frame
 | `rtabmap_ros` | `rtabmap`, `point_cloud_xyzrgb` | 3D SLAM |
 | `imu_filter_madgwick` | `imu_filter_madgwick_node` | Both modes |
 | `robot_localization` | `ekf_node` | Both modes |
-| `orbbec_camera` | `camera` (Gemini 2L driver) | 3D SLAM |
+| `orbbec_camera` | `camera` (Gemini 2 driver) | 3D SLAM |
 | `foxglove_bridge` | `foxglove_bridge` | 桌面 Foxglove Studio |
 | `rosbridge_suite` | `rosbridge_websocket` | 移动 SPA roslibjs ws 桥 |
 | `web_video_server` | `web_video_server` | 移动 SPA MJPEG 视频流 |
@@ -153,8 +197,8 @@ Architecture: **base 常驻 + 模式按需挂载**。`base.launch.py` 在 `remot
 
 | File | Package | Description |
 |------|---------|-------------|
-| `base.launch.py` | mentorpi_bringup | 常驻硬件: base_node + STM32 IMU Madgwick + EKF + camera_watchdog (托管 Gemini 2L) + joy + teleop + lidar + base→camera/laser TF |
-| `camera.launch.py` | mentorpi_bringup | Gemini 2L (RGB-D 15fps, IMU off)。**不直接进别的 launch** —— 由 `camera_watchdog` 节点 spawn 并监测 `/camera/depth/camera_info`,帧停发 >20s 或进程死亡时自动 `usbreset` + 重启 driver(修 openUsbDevice 卡死) |
+| `base.launch.py` | mentorpi_bringup | 常驻硬件: base_node + STM32 IMU Madgwick + EKF + camera_watchdog (托管 Gemini 2) + joy + teleop + lidar + robot_state_publisher (URDF 固定 TF: imu/camera/laser) + joint_state_publisher (轮子零位) |
+| `camera.launch.py` | mentorpi_bringup | Gemini 2 (RGB-D 15fps, IMU off)。**不直接进别的 launch** —— 由 `camera_watchdog` 节点 spawn 并监测 `/camera/depth/camera_info`,帧停发 >20s 或进程死亡时自动 `usbreset` + 重启 driver(修 openUsbDevice 卡死) |
 | `slam_2d.launch.py` | mentorpi_bringup | 仅 slam_toolbox 异步建图 |
 | `slam_3d.launch.py` | mentorpi_bringup | 仅 rtabmap + point_cloud_xyzrgb (相机已在 base 里跑)；融合 lidar `/scan` 做 NeighborLinkRefining + proximity detection 抗轮速打滑 |
 | `loc_2d.launch.py` | mentorpi_bringup | 仅 slam_toolbox 定位 (吃 `map_file:=...`) |
@@ -179,7 +223,7 @@ Architecture: **base 常驻 + 模式按需挂载**。`base.launch.py` 在 `remot
 
 **Sending (main thread):**
 - Motor speed commands (Function=3) from `/cmd_vel`
-- Gimbal servo commands (Function=4) from `/gimbal/cmd`
+- PWM servo commands (Function=4) from `/gimbal/cmd`
 - Buzzer commands (Function=2) from `/buzzer` (`mentorpi_msgs/Buzzer`: `freq` Hz, `on_time`/`off_time` seconds, `repeat` cycles). Used by supervisor for the startup chime.
 
 **Receiving (background thread):**
@@ -209,7 +253,7 @@ Architecture: **base 常驻 + 模式按需挂载**。`base.launch.py` 在 `remot
 
 ## IMU Data Flow
 
-两种模式都使用 STM32 IMU 经过 Madgwick + EKF 融合,Gemini 2L 自带 IMU 不参与 SLAM。
+两种模式都使用 STM32 IMU 经过 Madgwick + EKF 融合,Gemini 2 自带 IMU 不参与 SLAM。
 
 ```
 STM32 (Function=7, 6×float32: ax,ay,az,gx,gy,gz)
@@ -222,11 +266,11 @@ STM32 (Function=7, 6×float32: ax,ay,az,gx,gy,gz)
 
 **EKF 融合配置**(`ekf.yaml`):odom0 (/odom) 只融合 **vx/vy**;imu0 (/imu/data) 只融合 **vyaw**(陀螺仪 z 轴角速率,直接、低延迟、不受打滑影响)。此前 odom0 的 vyaw(指令角速率,麦轮原地旋转打滑最严重)和 imu0 的 differential yaw 双重计入同一陀螺仪信号,已移除。`base_link → imu_link` 静态 TF 在 `base.launch.py` 里发布(缺失时 robot_localization 会静默丢弃全部 IMU 测量)。
 
-3D 模式下 Gemini 2L 的 IMU 流通过 launch 参数关掉(`enable_accel/gyro: false`),节省 USB 带宽和 CPU。
+3D 模式下 Gemini 2 的 IMU 流通过 launch 参数关掉(`enable_accel/gyro: false`),节省 USB 带宽和 CPU。
 
 ## Calibration
 
-TF tree calibration plan (3 parts: wheel odometry → IMU → camera) documented in `docs/calibration.md`. Status: **TODO, not yet started**. Part 3 (camera extrinsic) will use AprilTag method + a self-developed calibration tool.
+TF tree calibration plan (wheel odometry → IMU → camera) is documented in `docs/calibration.md`. Wheel effective parameters and gyro scale/bias handling have prior calibration work; IMU mounting refinement remains. The previous camera extrinsic is invalid because the camera mount was changed, so Part 3 must be repeated only after the final camera bracket is fixed.
 
 ~~Known issue: missing `base_link → imu_link` static TF~~ — **已修复**,`base.launch.py` 现在发布该 TF(平移是估计值,轴向对齐才关键;若控制板装歪需改 RPY)。Part 2 标定时精化。
 
@@ -240,7 +284,7 @@ Full protocol documented in `docs/hardware_protocol.md`. Critical details:
 - **Motors 1,2 are sign-inverted** in the mecanum kinematics (official SDK convention).
 - **Servo IDs are 1-based.** PWM position is uint16 LE (500-2500 μs range).
 - **IMU (Function=7):** STM32 auto-reports. 24 bytes = 6×float32 LE (ax,ay,az in g; gx,gy,gz in deg/s).
-- **Mecanum parameters:** wheelbase=0.1368m, track_width=0.1410m, wheel_diameter=0.065m.
+- **Mecanum parameters:** 物理尺寸 wheelbase=0.1368m, track_width=0.1410m, wheel_diameter=0.065m（标称）。**代码用标定后的有效值**：wheelbase=0.1528/track_width=0.1575（2026-07-16 对墙旋转标定，含原地旋转打滑）、wheel_diameter=0.0636（2026-07-05 卷尺标定）、gyro_scale_z=0.9930——base_node 与 mecanum.xacro 必须同步。
 
 ## Joystick Mapping (Beitong BTP-KP20D)
 
@@ -249,9 +293,9 @@ axes[0]=lx  axes[1]=ly  axes[2]=rx  axes[3]=ry  axes[4]=r2  axes[5]=l2  axes[6/7
 ```
 
 - Left stick: ly→linear.x (forward/back), lx→linear.y (strafe)
-- Right stick X: angular.z (rotation) — OR gimbal yaw when RB held
-- Right stick Y: gimbal pitch when RB held
-- RB = buttons[7]. Releasing RB auto-centers gimbal to (90°, 90°).
+- Right stick X: angular.z (rotation) — OR auxiliary servo yaw when RB held
+- Right stick Y: auxiliary servo pitch when RB held
+- RB = buttons[7]. Releasing RB auto-centers the servos to (90°, 90°).
 - Deadzone: 0.1
 
 ## Lidar (oradar_lidar)
@@ -285,7 +329,7 @@ ros2 launch mentorpi_bringup localization.launch.py
 ros2 launch mentorpi_bringup localization.launch.py map_file:=/home/pi/maps/kitchen
 ```
 
-## 3D SLAM (RTAB-Map + Gemini 2L)
+## 3D SLAM (RTAB-Map + Gemini 2)
 
 - **Packages:** `rtabmap_ros`, `orbbec_camera`, `robot_localization` (install: `sudo apt install ros-jazzy-rtabmap-ros ros-jazzy-robot-localization`)
 - **架构:** 异构(heterogeneous) — 前端 EKF (轮速+IMU) 出 odom,后端 rtabmap 仅做 mapping + loop closure
@@ -341,7 +385,7 @@ rtabmap 节点参数:
 
 **Avoid `Rtabmap/CreateIntermediateNodes=true`** — triggers `Memory.cpp:3473::addLink() Condition (fromS->getWeight() >= 0 && toS->getWeight() >=0) not met` FATAL crash on rtabmap startup. Leave it at the default (false).
 
-**Gemini 2L USB requirements:**
+**Gemini 2 USB requirements:**
 - Must use USB 3.0 port (blue, 5000M) and USB-C 3.0 cable. USB 2.0 (480M) produces `color frame is not decoded` errors and disconnects within 1 second.
 - Pi 5 needs `PSU_MAX_CURRENT=5000` in EEPROM (`sudo rpi-eeprom-config --edit`) and `usb_max_current_enable=1` in `/boot/firmware/config.txt` to prevent voltage-drop-induced USB resets when the IR projector kicks in.
 - If camera fails to initialize (`uvc_open -6` / `openUsbDevice failed`), `camera_watchdog` now auto-recovers (usbreset + driver restart, ~1min cycle)。手动兜底: `usbreset 2bc5:0670` 后重启 driver。Stale `component_container` processes from a previous launch can also hold the device — check with `ps -ef | grep component_container`.
@@ -362,14 +406,28 @@ rviz2
 
 ### Static TF Configuration
 
-| Parent | Child | Translation (m) | Rotation (rad, ZYX) | Notes |
-|--------|-------|-----------------|---------------------|-------|
-| `base_link` | `camera_link` | x=0.05, z=0.15 | 0 0 0 (yaw pitch roll) | **占位估计值,需用尺子量后改** — 平移误差 → 点云整体偏移;旋转误差 → 点云累积"分层"伪影 |
-| `base_link` | `laser_frame` | z=0.18 | 0 0 0 | Lidar mount 高度 |
+固定 TF 全部来自 `mentorpi_description/urdf/mecanum.xacro`(robot_state_publisher 发布,不再用 static_transform_publisher):
 
-如果相机有俯仰角(常见,如低头看地面),`base_to_camera` 的 pitch 字段填弧度制(`10° ≈ 0.1745`)。
+| Joint | Parent → Child | xyz (m) | rpy (rad) | Notes |
+|-------|----------------|---------|-----------|-------|
+| `camera_joint` | `base_link → camera_link` | 0.061376 0 0.051154 | 0 0 0 | **vendor CAD 直装值**（从 pre_calibration 恢复）；粗定位、实装可能有位移，最终固定后用 `calibrate_camera_extrinsic.py` 重标 |
+| `laser_joint` | `base_link → laser_frame` | -0.012242 0 0.092501 | 0 0 0 | 从标定前 xacro + STL 恢复的直装变换；扫描面离地 143.001 mm |
+| `imu_joint` | `base_link → imu_link` | 0 0 0.05 | 0 0 0 | 估计值,Part 2 标定精化 |
+
+平移误差 → 点云整体偏移;旋转误差 → 点云累积"分层"伪影。改完 xacro 需 `colcon build --packages-select mentorpi_description` 后重启 base。
 
 ## Extending the System
+
+### Isaac Sim / Isaac Lab export
+
+`isaac/` holds import-ready robot descriptions **bound to the calibrated URDF**:
+`isaac/mentorpi.isaac.urdf` (base + camera + lidar) and
+`isaac/mentorpi_so101.isaac.urdf` (full mobile manipulator), plus an Isaac Lab
+`ArticulationCfg`. They are generated from `mecanum.xacro` — never hand-edited —
+via `bash isaac/export_isaac.sh`, which must be re-run after any calibration
+change (e.g. `calibrate_camera_extrinsic.py --update-xacro`) to re-sync. Import
+as a floating base with merge-fixed-joints; mecanum rollers are not simulated.
+Full guide: `isaac/README.md`. Generators: `mechanical/urdf/gen_mentorpi{,_so101}_isaac.py`.
 
 ### Adding navigation (Nav2)
 
@@ -387,7 +445,7 @@ The two modes share the same EKF-based frontend (base_node + STM32 IMU madgwick 
 
 主要差别:
 - **2D SLAM**:lidar `/scan` → slam_toolbox 出 `map → odom`
-- **3D SLAM**:Gemini 2L RGB-D **+ lidar `/scan`** → rtabmap 出 `map → odom` + 累积彩色点云。scan 用于 `RGBD/NeighborLinkRefining`(相邻节点 ICP 修正轮速打滑)和 `RGBD/ProximityBySpace`(重访区域的激光 proximity link,补视觉 loop closure 在白墙/暗光下的盲区)
+- **3D SLAM**:Gemini 2 RGB-D **+ lidar `/scan`** → rtabmap 出 `map → odom` + 累积彩色点云。scan 用于 `RGBD/NeighborLinkRefining`(相邻节点 ICP 修正轮速打滑)和 `RGBD/ProximityBySpace`(重访区域的激光 proximity link,补视觉 loop closure 在白墙/暗光下的盲区)
 - **2D Localization**:slam_toolbox loc 模式 + 已有 posegraph
 - **3D Localization (loc_3d)**:rtabmap 只读定位模式 + 已有 .db,重启后恢复 map 系位姿
 - **idle**:无 SLAM,纯遥控+预览
@@ -463,7 +521,7 @@ unit 文件在 `scripts/mentorpi-remote.service`,关键点:
 
 **安全模型**:第一版裸跑,假设局域网可信(无认证)。生产部署需要在 foxglove_bridge 前加 nginx + TLS + basic auth,或开 `ros-jazzy-foxglove-bridge` 的 TLS。
 
-**视频源**:Gemini 2L 在 base 里常驻,`/camera/color/image_raw` 跨所有模式始终可订。**Foxglove Image 面板必须订 `/camera/color/image_raw/compressed`**(layout 默认配置已切换);订原始 raw 流会让 WebSocket 在 WiFi 上严重拥塞。
+**视频源**:Gemini 2 在 base 里常驻,`/camera/color/image_raw` 跨所有模式始终可订。**Foxglove Image 面板必须订 `/camera/color/image_raw/compressed`**(layout 默认配置已切换);订原始 raw 流会让 WebSocket 在 WiFi 上严重拥塞。
 
 **地图保存**(v1 暂不在 supervisor 内):
 - 2D: `ros2 service call /slam_toolbox/serialize_map slam_toolbox/srv/SerializePoseGraph "{filename: '/home/pi/maps/my_room'}"`
@@ -480,6 +538,29 @@ unit 文件在 `scripts/mentorpi-remote.service`,关键点:
 - **rclpy 坑**（已修，勿回退）：Jazzy 的 `goal_handle.succeed()/abort()/canceled()` 会立即用**空 Result** 填 result future，靠 execute 回调返回值回填会跟客户端 result 请求竞态（高负载下客户端拿到空结果）。必须把 result 作为参数传给终态调用（见 `MotionNode._finalize`）。
 
 **语音接入**：AsynchronousIntentRoutingEngine（独立仓库）的 `robot` skill 通过 rosbridge (:9090) 调上述接口；服务器端设 `AIR_ROBOT_ROSBRIDGE_URL=ws://<robot-ip>:9090` 即启用。手动验证：AIRE 仓库 `python robot_cli.py ws://<robot-ip>:9090 move forward 0.5`。整体规划见 `docs/roadmap.md`。
+
+## SO-101 机械臂集成（layout v3，甲板 CAD 已定型、待实物装配）
+
+本轮会话状态见统一入口 `docs/handoff.md`；设计摘要和几何账本分别见
+`mechanical/README.md`、`mechanical/urdf/design-ledger.md`。旧 integration
+report 和 layout v2 提交只用于追溯，不再作为待办清单。
+
+- **臂朝前**，`base_link -> so101_base_link xyz=-0.155 0 0.0655`。恢复雷达
+  直装 TF 后，真实网格 pan ±110° 全扫转最差雷达头间隙 36.2 mm。
+- **雷达直接贴装**，`laser_joint xyz=-0.012242 0 0.092501`，扫描面离地
+  143.001 mm；没有塔架或增高座。甲板止于 x=-0.050，与雷达保留
+  10.95 mm 平面间隙。
+- **甲板四孔**：底盘 x=-61 mm，y=-24/-8/+8/+24 mm，Ø4.5 打印通孔，
+  M4 螺丝 + 垫圈 + 螺母。用户已确认孔无螺纹、贯穿且不固定雷达。
+- **自体掩膜**：装臂后 oradar 发 `/scan_raw`，`laser_filters` 按真实几何
+  掩膜后向 ±24° 后发 `/scan`。部署依赖 `ros-jazzy-laser-filters`。
+- **启用开关**：`with_so101:=true` 从 remote.launch.py 透传到 base.launch.py
+  和 xacro；默认 false 不加入臂、甲板和扫描滤波器。
+- **相机外参待重标**：相机已恢复直装 vendor CAD 值（`camera_joint`），实装可能有位移；
+  最终固定后才运行 AprilTag 标定精化。
+- **供电**：独立 2S 锂电 + 保险丝 + 带锁开关到 Feetech 板。前托架的
+  `HOOK_THROAT` 和 `PACK_*` 仍需用实物尺寸更新。
+- 参数化源、派生物、验证命令和下一步顺序全部维护在当前交接文档中。
 
 ## 3D 可视化 & 高斯泼溅 (Gaussian Splatting)
 

@@ -1,0 +1,12 @@
+[Unit]
+Description=Restart MentorPi stack on system clock steps (no-RTC-battery guard)
+Documentation=file:///home/pi/workdir/mentorpi/mentorpi_ws/scripts/clock-jump-guard.sh
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/clock-jump-guard.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

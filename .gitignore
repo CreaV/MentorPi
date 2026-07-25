@@ -14,3 +14,11 @@ rtabmap_maps
 gs_work/
 # 随手拍的接线照片
 IMG_*.jpg
+# CAD viewer cache artifacts (hidden .step.glb derivatives)
+.*.step.glb
+
+# baked preview GLB (derived, regenerate with mechanical/urdf/bake_urdf_glb.py)
+*.preview.glb
+
+# Isaac USD conversions (large, user-generated)
+isaac/usd/

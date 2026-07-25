@@ -7,33 +7,42 @@
 
 ### Part 1 — 轮速里程计（先做，否则相机外参会吸收里程计误差）
 
-- [ ] **Step 1.1 轮径 `wheel_diameter`**：地贴 5m 卷尺，`/usr/bin/python3.12
-      scripts/odom_calib.py` 锁原点 → 手柄匀速直行 ~3m 停稳 → Enter 读
-      `dist=d`，卷尺量实际 `D`，`wheel_diameter_new = old × D / d`。
-      正反向各 3 次取平均。
-- [ ] **Step 1.2 轴距和 `wheelbase + track_width`**：轮径标完后做。
-      `timeout 5.24 ros2 topic pub -r 20 /cmd_vel geometry_msgs/Twist
-      '{angular: {z: 0.3}}'`（理论 90°），odom_calib 读 `dyaw=ω`，激光投点/
-      量角器量实际 `θ`，`(W+T)_new = (W+T)_old × ω / θ`。
+- [x] **Step 1.1 轮径 `wheel_diameter`**(2026-07-05 完成,0.065→0.0636,
+      1m 误差 <5mm,已是 base_node 默认值)：地贴 5m 卷尺，
+      `scripts/odom_calib.py` 锁原点 → 匀速直行 ~3m → 卷尺比对。
+- [x] **Step 1.2 轴距和 `wheelbase + track_width`**(2026-07-16 完成,
+      `scripts/calibrate_rotation.py` 对墙 line-fit, CCW/CW 各 2 圈):
+      k_geom=1.117 → 0.1368/0.1410 改为 **0.1528/0.1575**(有效几何,
+      含麦轮原地旋转打滑;base_node `_mecanum` 与 mecanum.xacro 已同步)。
+      CCW/CW 差 2.1%,轻微左右不对称,暂不处理(见 Step 1.3)。
 - [ ] **Step 1.3 UMBmark**：4×4m 正方形顺/逆各 5 圈，判断 track_width 偏差
       与左右轮不对称（判据表见 calibration.md）。
 - [x] （已实现 vy_scale 参数,标定后保持 1.0）
       （麦轮横移打滑是系统性的，纯协方差盖不住尺度错）。
-- [ ] **验收**：3×3m 闭合路径，直线漂移 < 5%。
+- [x] **验收**(2026-07-16 完成,`scripts/acceptance_square.py` 激光 ICP
+      真值,0.7m 方形双向)：估计误差(物理 − EKF 认为) CCW 76mm/2.7% + 3.55°,
+      CW **10mm/0.4% + 0.70°** —— 平移 <5% ✅ 双向。
+      注 1:rotate 原语 0.5 rad/s 下每 90° 过冲若干度是执行误差,EKF 可见,
+      属 motion_node 调参,不算里程计账。
+      注 2:原地旋转有 ~2-3cm/360° 的平移"走步"(物理打滑,任何 odom 都
+      测不到),短路径占比大——0.5m 方形曾测得 5.7% 即此因。
 
 ### Part 2 — STM32 IMU
 
-- [ ] **Step 2.1 轴向检查**：车静止水平，`ros2 topic echo /imu/data_raw
-      --field linear_acceleration` 应见 `az≈+9.81, ax/ay≈0`；向前推车
-      `ax` 应为正。异常按 calibration.md 判据表修 `base_to_imu` 的 RPY。
-- [ ] **Step 2.2 精化 `base_link → imu_link` TF**：TF 已在
-      `base.launch.py`（z=0.05、零旋转为估计值），按 2.1 结果改 RPY，
-      平移尺子量。
+- [x] **Step 2.1 轴向检查**(2026-07-14/16 完成)：静态重力
+      ax+0.21/ay+0.29/az+9.56 → z 朝上、板基本水平;CCW 旋转 gz 峰值
+      +0.64 rad/s → z 轴符号符合 REP-103,无需改 RPY。(x/y 平面内朝向
+      未单独验证,但 EKF 只融 gz、Madgwick 只用重力,当前不影响任何消费者)
+- [ ] **Step 2.2 精化 `base_link → imu_link` TF**：TF 现由
+      `mecanum.xacro` 的 `imu_joint` 发布（z=0.05、零旋转为估计值），
+      按 2.1 结果改 RPY，平移尺子量。
 - [x] **Step 2.3 Gyro 零偏**(2026-07-12 在线估计上线)：绝对静止 60s 记录 `angular_velocity` 均值
       （典型 0.001~0.01 rad/s）。长期方案见下面代码项（启动自估计）。
-- [ ] **Step 2.4 Gyro_z 比例**：原地转实测 360°（物理量角），积分 gyro.z
-      应 = 2π，不等则在 base_node 乘比例系数。
-- [ ] **验收**：闭合路径 yaw 闭合误差 < 5°。
+- [x] **Step 2.4 Gyro_z 比例**(2026-07-16 完成, calibrate_rotation.py):
+      k_gyro=1.0071(CCW +0.65% / CW +0.76%,方向一致 → 真实刻度误差)
+      → base_node 新增 `gyro_scale_z=0.9930`,零偏扣除后应用,可热更新。
+- [x] **验收**(2026-07-16 完成,同 Part 1 验收数据)：yaw 估计误差
+      CCW 3.55° / CW 0.70° < 5° ✅ 双向。
 
 ### Part 3 — 相机外参 `base_link → camera_link`（依赖 Part 1+2）
 
@@ -46,14 +55,29 @@
       反推 `T_base_camLink = T_base_tag × T_camOptical_tag⁻¹ ×
       T_optical_camLink`。多帧取平均。依赖：`sudo apt install
       ros-jazzy-apriltag ros-jazzy-apriltag-ros`。
-- [ ] 自研标定工具（暂定 `mentorpi_calibration` 包）：自动化上述流程，
-      输出 static_transform_publisher 6 参数。
-- [ ] **验收**：rtabmap 点云无"分层"伪影，地面厚度 < 2cm。
+- [ ] 自研标定工具（暂定 `mentorpi_calibration` 包）：自动化上述流程。
+      写回链路已有：`calibrate_camera_extrinsic.py --update-xacro` 直接
+      原子更新 `mecanum.xacro` 的 `camera_joint`（RMS 超阈值拒绝）。
+- [x] **⚠️ 重标（2026-07-14 触发,2026-07-17 完成）**：螺丝重紧后 AprilTag 手眼重解,
+      8 站位 RMS 9.7mm：x/y/z = 0.1114/0.0305/0.0950(z 尺量固定),
+      rpy = -0.94°/-7.46°/+0.84°。**pitch 相比 07-12 变了 8.3°**——螺丝
+      松动影响实锤。已写回 xacro 并部署。旧 rtabmap.db 是旧外参建的,
+      重扫建议**换新 db 文件名**(8° 外参差会让新旧会话几何打架)。
+- [x] **验收**(2026-07-17 完成,新旧地图种子点云对比,20cm 网格 per-cell
+      median 平面分析)：地面峰值 z **-10.7cm → +1.3cm**(旧外参把地面压到
+      地下一分米!),格间中位数散布 1.3cm < 2cm ✅,平面倾斜 0.01° ✅,
+      无分层。分析代码在会话记录,数据 = gs_dataset_full(旧) vs
+      gs_dataset_0717(新) 的 sparse_pc.ply。
 
-### 激光雷达 yaw 对齐（顺手项）
+### 激光雷达外参精化（顺手项）
 
-- [ ] 车正对平墙，RViz 里 `/scan` 墙面线应与相机点云墙面重合、且垂直于
-      x 轴；有偏差改 `base_to_laser` 的 yaw。z=0.18 已实测无需动。
+- [ ] **yaw 对齐**：车正对平墙，RViz 里 `/scan` 墙面线应与相机点云墙面
+      重合、且垂直于 x 轴；有偏差改 `mecanum.xacro` 里 `laser_joint`
+      的 rpy yaw。z=0.18 已实测无需动。
+- [ ] **x/y 尺量**：2026-07-13 TF 迁入 URDF 时 `laser_joint` 取了
+      x=y=0，但 vendor CAD 给的是 x=-0.012；避障 guard 的 stop/slow
+      距离从雷达中心起算，这 1.2cm 直接吃进安全余量。下次上尺子顺手
+      量了填回。
 
 ## 2. 代码待做
 
@@ -68,6 +92,14 @@
       loc_3d 模式 SIGINT 宽限 ≥30s，且 rtabmap 永不 SIGKILL（超时只告警）。
 - [x] `accel_limit_linear/angular`（已实现,默认 1.5 / 10.0）
       实车调参：手柄阶跃指令下对比 `/odom` 与实际位移，斜坡太缓/太陡都改。
+- [x] **开机时钟跳变防护（2026-07-17 踩坑并当日修复,commit 657dd85）**：
+      Pi 无 RTC 电池,fake-hwclock 用旧时间启动 ROS,NTP 随后**运行中跳
+      ~22h** → EKF 幻觉、话题集体静默、相机 pipeline 反复死。两层修复:
+      ① `mentorpi-remote` 启动前有界等待 NTP 同步(60s 上限,离线照常启动);
+      ② 新 `mentorpi-clockguard.service`(clock-jump-guard.sh,REALTIME vs
+      BOOTTIME 增量差 >10s 即 try-restart 栈)。实测 ±30s 双向跳变均触发
+      自动恢复。install-systemd.sh 一并安装。**硬件根治可选**:Pi 5 自带
+      RTC(/dev/rtc0 已确认),买官方 RTC 电池插 J5 即免疫,软件层变双保险。
 - [ ] 地图保存进 supervisor/web UI（目前 2D 靠手动调 serialize_map 服务，
       手机端没有入口）。
 - [ ] Foxglove layout（`mentorpi.json`）补 loc_3d 模式按钮（web SPA 已有）。
@@ -142,22 +174,18 @@
 - [ ] 远期:VIO(相机 IMU 重新启用做视觉惯性里程计)或 GS 渲染式定位
       (research 向,roadmap P4)。
 
-## 4.7 传感器演进:pan/tilt 单目相机方案（2026-07-12 定调）
+## 4.7 相机型号:实机是 Gemini 2,部分功能引用仍写 2L(待核对)
 
-如果把 Gemini 2L 换成 2 自由度云台单目相机,**定位精度可以保住,但
-主力必须换成激光雷达**——现在的精度里激光 ICP 本来就承担大头:
+实机深度相机确认是 **Orbbec Gemini 2**(非 Gemini 2L)。文档散文名已统一为
+Gemini 2;但下列**功能性**引用仍指向 2L,**当前运转正常**,改动需在 Pi 上
+验证(确认 orbbec 包提供对应 launch、PID 正确、相机 bringup 正常)后再动:
 
-- **定位主力 → 2D 激光**(slam_toolbox loc / AMCL),室内同样 2~5cm,
-  与相机完全解耦,精度不降。
-- **失去的能力**:rtabmap RGB-D 定位/3D 彩色地图/GS 数据集导出
-  (单目无度量深度,rtabmap 建图要求 depth 或双目)。想保 3D 地图,
-  深度相机留着"建图会话专用",平时不跑。
-- **动态外参问题**:云台一动 base_link→camera 就不是静态 TF。方案 =
-  舵机角度实时发 joint TF;但 PWM 舵机精度 ~1-2°,3m 外即 5-10cm
-  投影误差 → **参与 SLAM/定位的帧只在云台归中锁死时取**,自由转动
-  时相机只做感知(找人/看物/VLA 输入),不进定位管线。
-- **建议架构**:激光管定位、云台单目管感知,各干强项;VLA/语音的
-  motion primitive 底座不受影响。
+- [ ] `src/mentorpi_bringup/launch/camera.launch.py:26` include 的
+      `gemini2L.launch.py` → 若 orbbec 包提供 `gemini2.launch.py` 则改用并实测。
+- [ ] `README.md` 示例里的 `camera_type:=gemini2l` 参数值。
+- [ ] USB PID `2bc5:0670`(见 CLAUDE.md / docs/power_troubleshooting.md /
+      camera_watchdog.py 的 `usbreset`)—— Gemini 2 与 2L 的 VID:PID 不同,
+      核对实机 `lsusb` 后更新。
 
 ## 4.5 今日遗留问题（2026-07-05 晚，按优先级）
 

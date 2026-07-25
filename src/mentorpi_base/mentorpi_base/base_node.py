@@ -80,7 +80,12 @@ class MentorPiBase(Node):
         baud = self.get_parameter('baudrate').value
 
         try:
-            self.ser = serial.Serial(None, baud, timeout=0.1)
+            # write_timeout: STM32 卡死(欠压锁死)但 USB 仍枚举时,CDC ACM
+            # 缓冲填满后 write() 会无限阻塞,把主线程连同全部定时器冻住
+            # (odom/battery 全停、无异常无日志,2026-07-16 实测)。加超时让
+            # 它抛 SerialTimeoutException(SerialException 子类)走既有的
+            # 关闭-重连路径,STM32 恢复供电后自动复活。
+            self.ser = serial.Serial(None, baud, timeout=0.1, write_timeout=0.2)
             self.ser.rts = False
             self.ser.dtr = False
             self.ser.setPort(port)
@@ -138,6 +143,11 @@ class MentorPiBase(Node):
         # 用 EMA 学习零偏,发布 /imu/data_raw 前扣除。
         self.declare_parameter('gyro_bias_estimation', True)
         self.gyro_bias_estimation = self.get_parameter('gyro_bias_estimation').value
+        # 陀螺 z 轴比例 (Step 2.4, 2026-07-16 对墙旋转标定): gyro 积分比
+        # 激光真值高 0.71% (CCW +0.65% / CW +0.76%, 两方向一致 → 刻度
+        # 误差而非噪声), k_gyro=1.0071 → 零偏扣除后乘 1/k_gyro。
+        self.declare_parameter('gyro_scale_z', 0.9930)
+        self.gyro_scale_z = self.get_parameter('gyro_scale_z').value
         self._gyro_bias = [0.0, 0.0, 0.0]
         self._gyro_bias_n = 0
         self._last_motion_time = 0.0
@@ -338,6 +348,8 @@ class MentorPiBase(Node):
             gy_r -= self._gyro_bias[1]
             gz_r -= self._gyro_bias[2]
 
+        gz_r *= self.gyro_scale_z
+
         msg.angular_velocity.x = gx_r
         msg.angular_velocity.y = gy_r
         msg.angular_velocity.z = gz_r
@@ -484,7 +496,7 @@ class MentorPiBase(Node):
     def _on_param_update(self, params):
         # 标定参数运行时热更新 (ros2 param set /mentorpi_base ...)
         # 必须为正: 轮径/横移尺度。允许 0 (=关闭斜坡): accel_limit_*。
-        positive = {'wheel_diameter', 'vy_scale'}
+        positive = {'wheel_diameter', 'vy_scale', 'gyro_scale_z'}
         non_negative = {'accel_limit_linear', 'accel_limit_angular',
                         'guard_stop_distance', 'guard_slow_distance',
                         'guard_scan_timeout', 'guard_ignore_radius',
@@ -633,8 +645,13 @@ class MentorPiBase(Node):
         self.cmd_vy = vy_raw
         self.cmd_wz = wz
 
-        wheelbase = 0.1368      # 前后轴距
-        track_width = 0.1410    # 左右轴距
+        # 有效几何 (Step 1.2, 2026-07-16 对墙旋转标定 calibrate_rotation.py,
+        # CCW/CW 各 2 圈, k_geom=odom/actual=1.117): 物理尺量 0.1368/0.1410,
+        # 差值是麦轮原地旋转的滚轮打滑,吸收进有效轴距后旋转前馈和 odom
+        # 积分才与实际一致。CCW/CW 差 2.1% (轻微左右不对称,暂不处理)。
+        # 改这里必须同步 mecanum.xacro 的 wheelbase/track_width。
+        wheelbase = 0.1528      # 前后轴距(有效)
+        track_width = 0.1575    # 左右轴距(有效)
         wheel_diameter = self.wheel_diameter  # 轮径(标定参数, 见 __init__)
 
         vp = wz * (wheelbase + track_width) / 2.0
@@ -662,7 +679,8 @@ class MentorPiBase(Node):
             try:
                 port = self.get_parameter('port').value
                 baud = self.get_parameter('baudrate').value
-                self.ser = serial.Serial(None, baud, timeout=0.1)
+                self.ser = serial.Serial(None, baud, timeout=0.1,
+                                         write_timeout=0.2)  # 见 __init__ 注释
                 self.ser.rts = False
                 self.ser.dtr = False
                 self.ser.setPort(port)
