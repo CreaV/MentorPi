@@ -1,14 +1,33 @@
 # Agent Handoff
 
-- 更新时间：2026-07-24
+- 更新时间：2026-07-25
 - 分支：`feat/voice-vla-extensions`
 - 关键提交（均已 push origin）：相机恢复直装（`84598e6`）、文档清理 Gemini 2L→2 + 云台（`728ce5c`）、Isaac 导出（`4410caf`）、**AprilTag 相机外参标定 RMS 9.6mm（`0846f7e`，已部署 Pi 并验证 TF）**。
-- 工作树：clean。
-- 用户自有文件：本会话已按用户明确指示 `git restore` 掉 `loc_check.json`，工作树不再有它
+- 工作树：**dirty** —— `src/mentorpi_supervisor/foxglove_layout/loc_check.json` 已改（本会话增强，未提交）；另有未跟踪目录 `rtabmap_maps_pi/`（用户自有，勿动）。
+- 本会话内容：Foxglove `loc_check` 布局增强（见下节）+ 答疑（Gemini 2 深度/3D SLAM 角色）。
 
 本文是整个仓库唯一的滚动会话交接。下一次 agent 先读本文，结束时重写覆盖。
 
-## 本会话做了什么
+## 本会话做了什么（2026-07-25）
+
+**Foxglove `loc_check.json` 布局增强**（已改盘，`git status` 显示 `M`，**未提交**）。这是客户端 import 用的布局文件，改它不需要 colcon build，Foxglove 里 `File → Import layout` 重选即可生效。在原 loc 布局基础上加了 6 类面板（共 17 个 panel）：
+
+1. **深度图**：`Image!depth` 订 `/viewer/depth_raw`（原始 16UC1，2Hz 节流，`lazy`）。⚠️ **压缩深度在 Foxglove 渲染不了**（`/…/compressed` 发 0 字节；`/…/compressedDepth` 带 12B ConfigHeader 会黑屏，见 `remote.launch.py:117-123`），所以只能用 raw 节流流。彩色图才走压缩 `/viewer/color_compressed`。
+2. **遥控**：`Teleop!drive` 发 `/cmd_vel`（↑↓=±0.25 m/s，←→=±1.0 rad/s，10Hz）。裸速度流，仍受 base_node 避障兜底拦截。
+3. **3D 建图命令**：`CallService!setSlam3d`（新建，`load_all_nodes:false`）、`setSlam3dExtend`（续图/扩图，`load_all_nodes:true`）、`listMaps`（`/mode/list_maps`）。新建/续图都是追加式 → 建新图须在 advanced 里把 `database_path` 改新文件名。
+4. **避障开关**：`CallService!guardOn`/`guardOff` 调 `/mentorpi_base/set_parameters` 热更 `obstacle_guard`（bool，type=1）。节点名是 `mentorpi_base`（不是 base_node）。
+5. **避障距离**：`CallService!guardDist` 热更 `guard_stop_distance`/`guard_slow_distance`（double，type=3，advanced 里改 `double_value`）；外加原生 `Parameters!guard` 面板可读/改 base_node 全部参数。
+6. **附赠**：`Indicator!guard` 订 `/guard/blocked`（空=绿 CLEAR，非空=红 BLOCKED）；左侧 3D 场景补 `/rtabmap/cloud`（rgb 上色）看建图。
+
+foxglove_bridge 已开 `parameters` capability（`remote.launch.py:97`），Parameters 面板和 set_parameters 按钮均可用。JSON 已 `python3 -c json.load` 校验通过。**主布局 `mentorpi.json` 未同步这些改动**（用户只要求改 loc_check）。
+
+**答疑记录**：Gemini 2 深度**参与 3D 建图**（累积彩色点云 + 2D 栅格 + 回环几何校验的核心输入），但**不参与位姿**（`rgbd_odometry` 停用，pose 来自轮速+IMU EKF，~20ms/45Hz，白墙暗光不 fail）；相机自带 IMU 也不接入。异构设计：深度管「地图长啥样+回环校正」，轮速+IMU 管「此刻在哪」。
+
+### 遗留（本节相关）
+- `loc_check.json` 改动**未提交**，等用户决定是否 commit / 是否同步到 `mentorpi.json`。
+- 布局里的 CallService 面板需真机 `remote.launch.py` 在跑才有对应 service；纯离线 Foxglove 只是按钮点了报错。
+
+## 上一会话（2026-07-24）：相机外参标定 + 文档清理 + Isaac 导出
 
 1. **交接机制泛化**（提交 `6e4aff4`，已推送）：`so101_handoff.md → docs/handoff.md`，`CLAUDE.md` 改为项目级，加 `AGENTS.md → CLAUDE.md` 软链。按用户明确指示 `git restore` 丢弃了 `loc_check.json` 的 Foxglove 布局改动。
 2. **相机恢复直装外参**（提交 `84598e6`，**未推送**）：详见下节。

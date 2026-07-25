@@ -29,6 +29,7 @@
       },
       "topics": {
         "/map": {"visible": true, "colorMode": "custom", "minColor": "#e8e8e8ff", "maxColor": "#1a1a66ff", "unknownColor": "#00000000", "frameLocked": true},
+        "/rtabmap/cloud": {"visible": true, "pointSize": 2, "colorMode": "rgb"},
         "/scan": {"visible": true, "colorMode": "flat", "flatColor": "#ff2200", "pointSize": 8, "decayTime": 0},
         "/localization_pose": {"visible": true, "type": "arrow", "color": "#33ddff", "showCovariance": true, "covarianceColor": "#33ddff33"},
         "/odometry/filtered": {"visible": false}
@@ -79,14 +80,22 @@
       "gradient": ["#ff3333", "#33aa44"],
       "reverse": false
     },
-    "CallService!setLoc3d": {
-      "serviceName": "/mode/set",
-      "requestPayload": "{\n  \"mode\": \"loc_3d\",\n  \"map_file\": \"\",\n  \"database_path\": \"\"\n}",
-      "layout": "vertical",
-      "advancedView": false,
-      "buttonText": "Start 3D Localization",
-      "buttonTooltip": "rtabmap loc mode on ~/rtabmap_maps/rtabmap.db",
-      "buttonColor": "#33ddff"
+    "Indicator!guard": {
+      "path": "/guard/blocked.data",
+      "style": "background",
+      "rules": [
+        {"operator": "=", "rawValue": "", "color": "#2c7a3f", "label": "GUARD CLEAR"}
+      ],
+      "fallbackColor": "#cc3300",
+      "fallbackLabel": "BLOCKED"
+    },
+    "Teleop!drive": {
+      "topic": "/cmd_vel",
+      "publishRate": 10,
+      "upButton": {"field": "linear-x", "value": 0.25},
+      "downButton": {"field": "linear-x", "value": -0.25},
+      "leftButton": {"field": "angular-z", "value": 1.0},
+      "rightButton": {"field": "angular-z", "value": -1.0}
     },
     "CallService!setIdle": {
       "serviceName": "/mode/set",
@@ -94,8 +103,73 @@
       "layout": "vertical",
       "advancedView": false,
       "buttonText": "Stop (idle)",
-      "buttonTooltip": "Stop localization",
+      "buttonTooltip": "Stop active mode and go idle",
       "buttonColor": "#888888"
+    },
+    "CallService!setLoc3d": {
+      "serviceName": "/mode/set",
+      "requestPayload": "{\n  \"mode\": \"loc_3d\",\n  \"map_file\": \"\",\n  \"database_path\": \"\"\n}",
+      "layout": "vertical",
+      "advancedView": true,
+      "buttonText": "Start 3D Localization",
+      "buttonTooltip": "rtabmap loc mode. Set database_path in advanced view to pick a .db (default ~/rtabmap_maps/rtabmap.db).",
+      "buttonColor": "#33ddff"
+    },
+    "CallService!setSlam3d": {
+      "serviceName": "/mode/set",
+      "requestPayload": "{\n  \"mode\": \"slam_3d\",\n  \"map_file\": \"\",\n  \"database_path\": \"\",\n  \"load_all_nodes\": false\n}",
+      "layout": "vertical",
+      "advancedView": true,
+      "buttonText": "3D SLAM: NEW map",
+      "buttonTooltip": "New RTAB-Map mapping session. Set database_path to a NEW filename to avoid appending to an old db.",
+      "buttonColor": "#33aa44"
+    },
+    "CallService!setSlam3dExtend": {
+      "serviceName": "/mode/set",
+      "requestPayload": "{\n  \"mode\": \"slam_3d\",\n  \"map_file\": \"\",\n  \"database_path\": \"\",\n  \"load_all_nodes\": true\n}",
+      "layout": "vertical",
+      "advancedView": true,
+      "buttonText": "3D SLAM: EXTEND map",
+      "buttonTooltip": "Continue/extend an existing db (load_all_nodes=true relocalizes & merges at start). Set database_path to the db you want to grow.",
+      "buttonColor": "#559933"
+    },
+    "CallService!listMaps": {
+      "serviceName": "/mode/list_maps",
+      "requestPayload": "{\n  \"mode\": \"slam_3d\"\n}",
+      "layout": "vertical",
+      "advancedView": false,
+      "buttonText": "List 3D maps",
+      "buttonTooltip": "List ~/rtabmap_maps/*.db (mode=slam_3d) or ~/maps/*.posegraph (mode=loc_2d)."
+    },
+    "CallService!guardOn": {
+      "serviceName": "/mentorpi_base/set_parameters",
+      "requestPayload": "{\n  \"parameters\": [\n    {\n      \"name\": \"obstacle_guard\",\n      \"value\": { \"type\": 1, \"bool_value\": true }\n    }\n  ]\n}",
+      "layout": "vertical",
+      "advancedView": false,
+      "buttonText": "Guard ON",
+      "buttonTooltip": "Enable lidar/depth obstacle guard on base_node.",
+      "buttonColor": "#2c7a3f"
+    },
+    "CallService!guardOff": {
+      "serviceName": "/mentorpi_base/set_parameters",
+      "requestPayload": "{\n  \"parameters\": [\n    {\n      \"name\": \"obstacle_guard\",\n      \"value\": { \"type\": 1, \"bool_value\": false }\n    }\n  ]\n}",
+      "layout": "vertical",
+      "advancedView": false,
+      "buttonText": "Guard OFF",
+      "buttonTooltip": "Disable obstacle guard (danger: no auto-stop). base_node param.",
+      "buttonColor": "#cc3300"
+    },
+    "CallService!guardDist": {
+      "serviceName": "/mentorpi_base/set_parameters",
+      "requestPayload": "{\n  \"parameters\": [\n    {\n      \"name\": \"guard_stop_distance\",\n      \"value\": { \"type\": 3, \"double_value\": 0.30 }\n    },\n    {\n      \"name\": \"guard_slow_distance\",\n      \"value\": { \"type\": 3, \"double_value\": 0.60 }\n    }\n  ]\n}",
+      "layout": "vertical",
+      "advancedView": true,
+      "buttonText": "Set guard distances",
+      "buttonTooltip": "Edit double_value in advanced view. stop=清零分量距离 (from lidar center), slow=开始减速距离. Both m.",
+      "buttonColor": "#556677"
+    },
+    "Parameters!guard": {
+      "title": "base_node params (guard/*)"
     },
     "RawMessages!pose": {
       "topicPath": "/localization_pose.pose.pose.position"
@@ -108,36 +182,73 @@
     "first": "3D!loccheck",
     "second": {
       "first": {
-        "first": {
-          "first": "Image!cam",
-          "second": "Image!depth",
-          "direction": "column",
-          "splitPercentage": 50
-        },
-        "second": {
-          "first": "Indicator!mode",
-          "second": "Gauge!battery",
-          "direction": "row",
-          "splitPercentage": 60
-        },
-        "direction": "column",
-        "splitPercentage": 72
+        "first": "Image!cam",
+        "second": "Image!depth",
+        "direction": "row",
+        "splitPercentage": 50
       },
       "second": {
         "first": {
-          "first": "CallService!setLoc3d",
-          "second": "CallService!setIdle",
+          "first": "Indicator!mode",
+          "second": {
+            "first": "Gauge!battery",
+            "second": "Indicator!guard",
+            "direction": "row",
+            "splitPercentage": 50
+          },
           "direction": "row",
-          "splitPercentage": 55
+          "splitPercentage": 34
         },
-        "second": "RawMessages!pose",
+        "second": {
+          "first": "Teleop!drive",
+          "second": {
+            "first": {
+              "first": {
+                "first": "CallService!setIdle",
+                "second": "CallService!setLoc3d",
+                "direction": "row",
+                "splitPercentage": 45
+              },
+              "second": {
+                "first": {
+                  "first": "CallService!setSlam3d",
+                  "second": "CallService!setSlam3dExtend",
+                  "direction": "row"
+                },
+                "second": "CallService!listMaps",
+                "direction": "row",
+                "splitPercentage": 70
+              },
+              "direction": "column"
+            },
+            "second": {
+              "first": {
+                "first": {
+                  "first": "CallService!guardOn",
+                  "second": "CallService!guardOff",
+                  "direction": "row"
+                },
+                "second": "CallService!guardDist",
+                "direction": "row",
+                "splitPercentage": 66
+              },
+              "second": "Parameters!guard",
+              "direction": "column",
+              "splitPercentage": 35
+            },
+            "direction": "column",
+            "splitPercentage": 52
+          },
+          "direction": "column",
+          "splitPercentage": 26
+        },
         "direction": "column",
-        "splitPercentage": 40
+        "splitPercentage": 20
       },
       "direction": "column",
-      "splitPercentage": 55
+      "splitPercentage": 32
     },
     "direction": "row",
-    "splitPercentage": 68
+    "splitPercentage": 58
   }
 }
