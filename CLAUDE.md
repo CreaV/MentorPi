@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-A ROS 2 Jazzy workspace for the MentorPi robot — a Raspberry Pi 5 + RRCLite STM32 mecanum-wheel car with an MS200 lidar, an Orbbec Gemini 2 depth camera, and an optional LeRobot SO-101 arm. The camera is direct-mounted to the base; its extrinsic is pending recalibration after the mount changed. The deployed workspace lives at `/home/pi/workdir/mentorpi/mentorpi_ws/`.
+A ROS 2 Jazzy workspace for the MentorPi robot — a Raspberry Pi 5 + RRCLite STM32 mecanum-wheel car with an MS200 lidar, an Orbbec Gemini 2 depth camera, and an optional LeRobot SO-101 arm. The camera is direct-mounted to the base; its extrinsic was re-calibrated by AprilTag on 2026-07-24 (position RMS 9.6 mm) and is deployed. The deployed workspace lives at `/home/pi/workdir/mentorpi/mentorpi_ws/`.
 
 ## Session Continuation & Handoff Protocol
 
@@ -161,7 +161,7 @@ map → odom → base_link → camera_link → camera_*_optical_frame
                          (static, xyz=-0.012242 0 0.092501)
 ```
 
-**固定 TF 的源头是 URDF**：`base_link → imu_link/camera_link/laser_frame` 由 `mentorpi_description/urdf/mecanum.xacro` 定义，`base.launch.py` 的 robot_state_publisher 以 `runtime_mode:=true` 渲染发布。雷达和相机都是直装变换；`camera_joint` 现为从 pre_calibration 恢复的 vendor CAD 直装值（实装可能有位移），最终固定后须重做 AprilTag 标定精化。轮子是 continuous joint，由 joint_state_publisher 发零位 `/joint_states` 补齐 TF（无编码器）。
+**固定 TF 的源头是 URDF**：`base_link → imu_link/camera_link/laser_frame` 由 `mentorpi_description/urdf/mecanum.xacro` 定义，`base.launch.py` 的 robot_state_publisher 以 `runtime_mode:=true` 渲染发布。雷达和相机都是直装变换；`camera_joint` 为 2026-07-24 AprilTag 手眼标定值（position-only RMS 9.6mm，已部署 Pi 验证）。轮子是 continuous joint，由 joint_state_publisher 发零位 `/joint_states` 补齐 TF（无编码器）。
 
 **相机生命周期**:Gemini 2 在 `base.launch.py` 里**常驻**(15fps RGB-D),`/camera/color/image_raw` 始终可订,跨模式切换不重启相机。`slam_3d` 模式只在已运行的相机流上加 rtabmap + 点云;2D / loc / idle 模式也能直接用相机预览(虽然没用到 depth)。永久代价:相机 driver ~15-20% CPU on Pi 5。
 
@@ -270,7 +270,7 @@ STM32 (Function=7, 6×float32: ax,ay,az,gx,gy,gz)
 
 ## Calibration
 
-TF tree calibration plan (wheel odometry → IMU → camera) is documented in `docs/calibration.md`. Wheel effective parameters and gyro scale/bias handling have prior calibration work; IMU mounting refinement remains. The previous camera extrinsic is invalid because the camera mount was changed, so Part 3 must be repeated only after the final camera bracket is fixed.
+TF tree calibration plan (wheel odometry → IMU → camera) is documented in `docs/calibration.md`. Wheel effective parameters and gyro scale/bias handling have prior calibration work (signed off 2026-07-16); IMU mounting refinement (Part 2) remains. Part 3 — camera extrinsic — was re-done for the direct-mounted Gemini 2 on 2026-07-24 via `scripts/calibrate_camera_extrinsic.py` (AprilTag hand-eye, 7 poses, position-only RMS 9.6 mm) and is deployed; redo it if the camera is ever moved.
 
 ~~Known issue: missing `base_link → imu_link` static TF~~ — **已修复**,`base.launch.py` 现在发布该 TF(平移是估计值,轴向对齐才关键;若控制板装歪需改 RPY)。Part 2 标定时精化。
 
@@ -410,7 +410,7 @@ rviz2
 
 | Joint | Parent → Child | xyz (m) | rpy (rad) | Notes |
 |-------|----------------|---------|-----------|-------|
-| `camera_joint` | `base_link → camera_link` | 0.061376 0 0.051154 | 0 0 0 | **vendor CAD 直装值**（从 pre_calibration 恢复）；粗定位、实装可能有位移，最终固定后用 `calibrate_camera_extrinsic.py` 重标 |
+| `camera_joint` | `base_link → camera_link` | 0.1017 0.0137 0.0535 | -0.0171 -0.1196 0.0323 | **AprilTag 手眼标定值 2026-07-24**（直装相机光学中心，position-only RMS 9.6mm / 7 poses；z=0.0535 为尺量固定值，平面运动不可观）。重标：`calibrate_camera_extrinsic.py --update-xacro` |
 | `laser_joint` | `base_link → laser_frame` | -0.012242 0 0.092501 | 0 0 0 | 从标定前 xacro + STL 恢复的直装变换；扫描面离地 143.001 mm |
 | `imu_joint` | `base_link → imu_link` | 0 0 0.05 | 0 0 0 | 估计值,Part 2 标定精化 |
 
@@ -556,8 +556,8 @@ report 和 layout v2 提交只用于追溯，不再作为待办清单。
   掩膜后向 ±24° 后发 `/scan`。部署依赖 `ros-jazzy-laser-filters`。
 - **启用开关**：`with_so101:=true` 从 remote.launch.py 透传到 base.launch.py
   和 xacro；默认 false 不加入臂、甲板和扫描滤波器。
-- **相机外参待重标**：相机已恢复直装 vendor CAD 值（`camera_joint`），实装可能有位移；
-  最终固定后才运行 AprilTag 标定精化。
+- **相机外参已标定**：`camera_joint` = 2026-07-24 AprilTag 手眼标定值
+  （RMS 9.6mm，已部署）。装臂后若相机被碰动需重标。
 - **供电**：独立 2S 锂电 + 保险丝 + 带锁开关到 Feetech 板。前托架的
   `HOOK_THROAT` 和 `PACK_*` 仍需用实物尺寸更新。
 - 参数化源、派生物、验证命令和下一步顺序全部维护在当前交接文档中。

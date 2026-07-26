@@ -92,7 +92,8 @@ than wheel torques.
 
 After merge-fixed-joints, `camera_link`, `laser_frame`, and `imu_link` live on
 the `base_link` rigid body at their calibrated offsets:
-- `camera_link`: base_link + `xyz 0.061376 0 0.051154` (direct-mount vendor CAD;
-  **pending AprilTag re-calibration** — re-export after it lands).
+- `camera_link`: base_link + `xyz 0.1017 0.0137 0.0535` /
+  `rpy -0.0171 -0.1196 0.0323` (AprilTag hand-eye calibration 2026-07-24,
+  position RMS 9.6 mm; re-export if the camera is ever re-calibrated).
 - `laser_frame`: base_link + `xyz -0.012242 0 0.092501`.
 Attach Isaac camera/lidar sensors to these prims to match the real robot.
