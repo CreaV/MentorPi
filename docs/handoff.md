@@ -103,6 +103,14 @@
 - 整机可视化：`mechanical/urdf/bake_urdf_glb.py` 烤 GLB（three.js URDF loader 会打散 fixed-joint 子树）；viewer 绑 `0.0.0.0` 可局域网看，dev 机 IP `192.168.8.137`
 - Pi：`pi@192.168.8.117`，部署 = pull + `colcon build` + `sudo systemctl restart mentorpi-remote`
 
+## AIRE 配对仓库（`/media/luo/Game/data/code/AIRE`）
+
+语音/VLA 的「大脑」在 AIRE，通过 rosbridge `:9090` 调本仓库 `mentorpi_motion` 的 `motion/primitive` action 和 `motion/stop` service —— **两仓库必须成对部署**（机器人端要有 `mentorpi_motion` 已构建且在 `base.launch.py` 里）。
+
+**2026-07-26 本会话**：AIRE `feat/robot-skill` 已 `--ff-only` 合入 `main`（9 个提交，到 `c2516d0`）并 push 到 `origin/main`。**分支本身保留**（用户只要求删 MentorPi 那条）；local + `origin/feat/robot-skill` 都还在。AIRE 工作树有未跟踪的 `.venv/`、`package.json`、`package-lock.json`（**用户自有，勿动**）。
+
+关键入口：`air_engine/cloud/skills/robot.py`（skill）、`air_engine/cloud/robot/{rosbridge_client,tools,vlm_agent}.py`、`robot_cli.py`、`robot_vla_cli.py`。服务器端设 `AIR_ROBOT_ROSBRIDGE_URL=ws://192.168.8.117:9090` 启用。手动验证：`python robot_cli.py ws://192.168.8.117:9090 move forward 0.5`。
+
 ## 下个 agent 如何继续
 
 ```bash
