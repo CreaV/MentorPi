@@ -58,6 +58,8 @@ def generate_launch_description():
         # ExecStart 里给 remote.launch.py 加 with_so101:=true。
         DeclareLaunchArgument('with_so101', default_value='false',
             description='SO-101 arm installed (passed through to base.launch.py)'),
+        DeclareLaunchArgument('camera_imu', default_value='false',
+            description='Enable the Gemini 2 built-in IMU (passed through to base.launch.py)'),
 
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(
@@ -65,6 +67,7 @@ def generate_launch_description():
             ),
             launch_arguments={
                 'with_so101': LaunchConfiguration('with_so101'),
+                'camera_imu': LaunchConfiguration('camera_imu'),
             }.items(),
         ),
 

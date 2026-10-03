@@ -18,60 +18,7 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
-
-# Shared between slam_3d and loc_3d (keep in sync with loc_3d.launch.py).
-RTABMAP_TOPIC_PARAMS = {
-    'frame_id': 'base_link',
-    'odom_frame_id': 'odom',
-    'subscribe_depth': True,
-    'subscribe_rgb': True,
-    'subscribe_scan': True,
-    'subscribe_odom_info': False,
-    'approx_sync': True,
-    'topic_queue_size': 20,
-    'sync_queue_size': 20,
-    # MS200 driver publishes /scan with SensorDataQoS (best effort);
-    # a reliable subscription would never match it.
-    'qos_scan': 2,
-}
-
-RTABMAP_TUNING_PARAMS = {
-    # Ground robot: lock roll/pitch/z out of the pose graph.
-    'Reg/Force3DoF': 'true',
-    # Visual + ICP registration: loop closures found visually get refined
-    # with the lidar scan instead of trusting the (slipping) odom guess.
-    'Reg/Strategy': '1',
-    # Scan-match consecutive nodes against odom — the main wheel-slip fix.
-    'RGBD/NeighborLinkRefining': 'true',
-    # Lidar proximity detection when driving back through a mapped area.
-    'RGBD/ProximityBySpace': 'true',
-    'RGBD/ProximityPathMaxNeighbors': '10',
-    # ICP settings for a sparse 450-point 2D scan.
-    'Icp/VoxelSize': '0.05',
-    'Icp/MaxCorrespondenceDistance': '0.15',
-    'Icp/CorrespondenceRatio': '0.2',
-    'Icp/MaxTranslation': '0.5',
-    'Icp/PointToPlane': 'false',
-    # Pi 5 budget.
-    'Rtabmap/DetectionRate': '2.0',
-    'RGBD/OptimizeMaxError': '3.0',
-    'Kp/MaxFeatures': '300',
-    # Occupancy grid from lidar + depth (0=scan, 1=depth, 2=both).
-    'Grid/Sensor': '2',
-    'Grid/MaxGroundHeight': '0.05',
-    'Grid/MaxObstacleHeight': '1.5',
-    'Grid/RangeMax': '5.0',
-    'Grid/3D': 'true',
-    'GridGlobal/MinSize': '20.0',
-}
-
-RTABMAP_REMAPPINGS = [
-    ('rgb/image', '/camera/color/image_raw'),
-    ('rgb/camera_info', '/camera/color/camera_info'),
-    ('depth/image', '/camera/depth/image_raw'),
-    ('scan', '/scan'),
-    ('odom', '/odometry/filtered'),
-]
+from mentorpi_bringup import rtabmap_params as rp
 
 
 def generate_launch_description():
@@ -96,6 +43,17 @@ def generate_launch_description():
         database_path_arg,
         load_all_nodes_arg,
 
+        # Pair RGB + depth (+ color camera_info) into one RGBDImage so
+        # rtabmap only has to sync it with the scan, with a bounded window.
+        Node(
+            package='rtabmap_sync',
+            executable='rgbd_sync',
+            name='rgbd_sync',
+            output='screen',
+            parameters=[rp.RGBD_SYNC_PARAMS],
+            remappings=rp.RGBD_SYNC_REMAPPINGS,
+        ),
+
         # rtabmap (mapping + loop closure)
         Node(
             package='rtabmap_slam',
@@ -103,15 +61,17 @@ def generate_launch_description():
             name='rtabmap',
             output='screen',
             parameters=[{
-                **RTABMAP_TOPIC_PARAMS,
-                **RTABMAP_TUNING_PARAMS,
+                **rp.slam_params(),
                 'database_path': database_path,
                 'Mem/IncrementalMemory': 'true',
                 # rtabmap 的参数全是字符串类型; LaunchConfiguration 直接传
                 # 会被 YAML 解析成 bool -> rtabmap 启动即 abort (实测 2026-07-12)。
                 'Mem/InitWMWithAllNodes': ParameterValue(load_all_nodes, value_type=str),
             }],
-            remappings=RTABMAP_REMAPPINGS,
+            remappings=rp.REMAPPINGS,
+            # 关闭时给 rtabmap 足够时间落库 (见 rtabmap_params 注释)。
+            sigterm_timeout=rp.RTABMAP_SIGTERM_TIMEOUT,
+            sigkill_timeout=rp.RTABMAP_SIGKILL_TIMEOUT,
         ),
 
         # Decimated colored point cloud for RViz / Foxglove visualization

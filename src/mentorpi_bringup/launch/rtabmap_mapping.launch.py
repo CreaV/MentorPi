@@ -2,7 +2,8 @@
 3D SLAM (full-stack CLI entry point). Composition of base + slam_3d.
 
 For interactive remote operation use remote.launch.py + supervisor instead;
-this launch is for direct CLI usage. Pass database_path as a launch arg.
+this launch is for direct CLI usage. Pass database_path (and
+load_all_nodes:=true to continue an existing map) as launch args.
 """
 import os
 from launch import LaunchDescription
@@ -18,9 +19,13 @@ def generate_launch_description():
     database_path_arg = DeclareLaunchArgument(
         'database_path', default_value='~/rtabmap_maps/rtabmap.db',
         description='Path to RTAB-Map database file')
+    load_all_nodes_arg = DeclareLaunchArgument(
+        'load_all_nodes', default_value='false',
+        description='Continue an existing map: load all old nodes into WM at start')
 
     return LaunchDescription([
         database_path_arg,
+        load_all_nodes_arg,
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(
                 os.path.join(bringup_dir, 'launch', 'base.launch.py')
@@ -30,6 +35,9 @@ def generate_launch_description():
             PythonLaunchDescriptionSource(
                 os.path.join(bringup_dir, 'launch', 'slam_3d.launch.py')
             ),
-            launch_arguments={'database_path': LaunchConfiguration('database_path')}.items(),
+            launch_arguments={
+                'database_path': LaunchConfiguration('database_path'),
+                'load_all_nodes': LaunchConfiguration('load_all_nodes'),
+            }.items(),
         ),
     ])

@@ -223,7 +223,10 @@ class SupervisorNode(Node):
         # over 10s on the Pi's SD card, and killing it mid-save corrupts
         # the visual word dictionary (loadWordsQuery 0 words, relocation
         # permanently broken — observed 2026-07-05). 3D modes get a long
-        # grace period; SIGKILL only as the very last resort.
+        # grace period; SIGKILL only as the very last resort. ros2 launch
+        # escalates on its own (SIGTERM/SIGKILL after 5 s each by default),
+        # so the rtabmap Node carries matching sigterm/sigkill timeouts —
+        # see mentorpi_bringup/rtabmap_params.py; keep the two in step.
         sigint_grace = 90 if self._current_mode in ('slam_3d', 'loc_3d') else 10
         try:
             proc.wait(timeout=sigint_grace)

@@ -1,4 +1,4 @@
-# 纯视觉建图极限探索 Roadmap（2026-10-03 草案）
+# 纯视觉建图极限探索 Roadmap（2026-10-03，修订版）
 
 目标：在**不依赖激光雷达**的前提下，摸清 MentorPi（Gemini 2 + Pi 5，局域网 4070S 可用）
 的 3D 建图能力上限，并把有效改进落回现有系统。雷达保留，但角色从"建图传感器"
@@ -60,86 +60,119 @@ rgbd_sync + 压缩                  ◀──── map→odom TF（低频）─
 2. **VIO 是 EKF 的额外输入，不替代 EKF**。VIO 跟丢时，EKF 自动退回轮速 + 陀螺仪，保持现在约 20ms 的延迟和鲁棒性。
 3. **先离线、后实时**。同一份 bag 能反复比较多种算法，确认真有收益再做实时化。
 
-## 3. 分阶段计划
+## 3. 目标与成功标准（2026-10-03 修订）
 
-### P0 — 修现有链路（只动 Pi，约 1–2 天）
+"预期"分三档，各自的判定标准不同。每完成一个阶段，都要回到这张表核对：
 
-来自 2026-10-03 代码审查，与视觉无关，但不修的话后面的评测数据不可信：
+| 档位 | 内容 | 判定标准 | 预估可达性 |
+|---|---|---|---|
+| A. 能力边界结论 | 回答"不用雷达能做到什么程度" | 8 类场景 × 各方案的误差表，每个场景给出明确结论 | 高。快速验证 S 加上 P5 一定能产出 |
+| B. 室内纯视觉可用 | 平地多房间、快速旋转、光照变化下，不用雷达也能建出可用地图 | 和雷达真值相比，平移 ATE < 行进距离的 2%，回环无误合并，跟踪丢失率 < 1% | 中高 |
+| C. 极端场景 | 暗光、坡道、长隧道 | 分场景定 | 暗光、坡道：有条件；长隧道、管道：低（纯视觉的物理极限） |
 
-- [ ] supervisor 启动 3D 模式时传 `sigterm_timeout` / `sigkill_timeout`。现在 `ros2 launch` 默认约 10s 就 SIGKILL，90s 宽限形同虚设；clock-jump-guard 的重启同样依赖这个宽限。
-- [ ] `Grid/MaxGroundHeight` 改为相对 `base_link` 的值（`base_link` 离地 0.0505m），或者运行态补一个 `base_footprint`。
-- [ ] 核实相机 pitch（-0.1196 rad = 抬头约 6.9°）；低障虚拟激光改成在 `base_link` 系按高度切片。
-- [ ] RGB-D 同步收紧：驱动开帧同步，加 `rgbd_sync`，`approx_sync_max_interval` 约 0.03s。
-- [ ] rtabmap 参数抽到共享 YAML；加 `Rtabmap/TimeThr`。
+Gemini 2 和 OAK-D Pro W 的硬件差距（卷帘彩色、15fps、视场角约 90°、没有板载 NPU、IMU 同步未知、无编码器）是 C 档的天花板。计划不承诺复现 OAK 的极限演示。
 
-**验收**：连续 3 次切换模式不损坏数据库；栅格地图上 5–10cm 的低障碍可见。
+## 4. 分阶段计划（修订：先快速验证，再按结果分支）
 
-### P1 — 评测基础设施（"没有尺子就谈不上极限"，约 1 周）
+原计划按顺序写了 P0–P5，问题是关键信息要到 P2 才出现。修订后的顺序：
 
-- [ ] `camera.launch.py` 增加可选开关 `enable_imu` / `enable_ir`，默认关，不影响现网。
-  - 先实测 Gemini 2 的 IMU 时间戳和图像是否同一时钟、IMU 频率能开到多少。
-  - 驱动能输出几路 IR、能否开关投射器，都要先查驱动参数再定方案。
-- [ ] 用 Kalibr 做相机-IMU 标定（外参 + 时间偏移）：用 AprilGrid 标定板，录一段 60–90s 的充分激励数据。
-- [ ] Pi ↔ 4070S 时间同步：chrony 以局域网主机为源，验收指标是偏差 < 1ms。也让 clock-jump-guard 少触发。
-- [ ] 扩充 `record_3d_bag.sh`：加 IMU、IR，以及 `/tf` 原样记录（已有）。
-- [ ] **刁难场景数据集**，每段 1–3 分钟，全部带雷达：
-  1. 快速原地旋转
-  2. 关灯（只有 IR）
-  3. 白墙或低纹理
-  4. 长直走廊（模拟隧道）
-  5. 坡道
-  6. 大回环（测回环）
-  7. 多房间往返
-  8. 同一路线白天和夜晚各一次（测光照不变重定位）
-- [ ] 真值：离线用雷达跑 slam_toolbox 或 rtabmap ICP 的轨迹作参考；短段再加 AprilTag。
-- [ ] 评测脚本：用 `evo` 算 ATE / RPE，另统计跟踪丢失率、回环成功率和误回环数，输出一张"场景 × 方案"表。
+```
+P0 修现网 ──┐
+            ├─▶ S 快速验证（2 周）──▶ 决策点 ─┬─▶ P2 VIO 前端
+S0 IMU 实测 ┘                                ├─▶ P3 后端上 4070S
+                                             └─▶ 止步：瓶颈在相机硬件，出结论
+                         P4 / P5 只在前面有正收益时才做
+```
 
-**验收**：现有 RTAB-Map + EKF 在 8 个场景上有基线分数。
+### P0 — 修现有链路（只动 Pi）
 
-### P2 — 前端升级：视觉惯性里程计（离线在 4070S 上对比，约 2–3 周）
+来自 2026-10-03 代码审查。
 
-候选方案（按改动由小到大）：
+**代码已改（分支 `feat/3d-mapping-p0`），尚未在 Pi 上验证**：
+- [x] rtabmap 节点设 `sigterm_timeout=85` / `sigkill_timeout=15`（作为 Node 参数直接传入，不依赖 launch 参数作用域），与 supervisor 的 90s 宽限对齐。
+- [x] `Grid/MaxGroundHeight` 改为相对 `base_link` 的值：0.04 − 0.0505 = -0.0105，即离地约 4cm。
+- [x] 新增 `rgbd_sync` 节点，先把 RGB-D 打包再交给 rtabmap，`approx_sync_max_interval=0.034`（半帧）。rtabmap 改为 `subscribe_rgbd` + scan。等 S0 测出真实偏移后再收紧。
+- [x] rtabmap 参数抽到 `mentorpi_bringup/rtabmap_params.py`（Python 模块，可被两个 launch 导入），加单元测试，检查全部为字符串、两个模式只有预期的差异项。
+- [x] 修正 `Reg/Strategy` 的注释；`rtabmap_mapping.launch.py` 透传 `load_all_nodes`。
 
-| 方案 | 特点 | 预期价值 |
-|---|---|---|
-| RTAB-Map `rgbd_odometry`（F2M）+ IMU 作初值 | 零新依赖 | 最快出结果，作对照组 |
-| ORB-SLAM3 RGB-D-Inertial | 成熟，社区有 Gemini 2 实践 | 紧耦合 VIO 基线 |
-| OpenVINS / Basalt | 轻量滤波 / 优化 VIO | 最可能在 Pi 5 上实时跑 |
-| VIW-Fusion 类（视觉 + IMU + 轮速） | 专治地面车尺度不可观 | 理论上最适合本车；轮速是 cmd_vel 而不是编码器，收益需实测 |
-| DROID-SLAM / DPVO | 学习型，GPU | 低纹理、模糊场景的上限参考 |
+**需要在 Pi 上做**：
+- [ ] 连续 3 次切换 `slam_3d` → `idle`，看日志确认 rtabmap 正常退出（没有被 SIGKILL）、数据库能重新加载。
+- [ ] 栅格地图：平地上没有地板误判成的假障碍，5–10cm 的纸箱能看到。
+- [ ] `/rtabmap/info` 显示每帧都在处理（rgbd_sync 有输出）。
+- [ ] 核实相机 pitch（-0.1196 rad = 抬头约 6.9°）：平地点云的地面是否水平。确认后再决定 depth_low_scan 是否改成在 `base_link` 系做高度切片。
 
-- [ ] 每个方案跑完整个 P1 数据集，出对比表。
-- [ ] 选出的方案作为 EKF 的 `odom1` 接入：只融合 vx/vy/vyaw，协方差动态给，跟丢时拉大。
-- [ ] 实测 Pi 5 能否实时跑（CPU、延迟）；跑不动就放在 4070S 上，只服务建图，不服务控制。
+**推迟到 S 阶段**：`Rtabmap/TimeThr` 要等测出 Pi 上 rtabmap 的实际处理耗时再设，盲设会让工作内存被过度清空。
 
-**验收**：在长走廊、白墙、快速旋转三个场景，漂移和丢失率比基线明显下降，阈值在 P1 出基线后再定。
+### S0 — 相机 IMU 实测（第一个决策点，约 1 天）
 
-### P3 — 后端上 4070S：学习特征和学习回环（约 2 周）
+**代码已改**：
+- `remote.launch.py` / `base.launch.py` 新增 `camera_imu:=true|false` 参数（默认 false，现网行为不变），经 camera_watchdog 传给 `camera.launch.py` 的 `enable_imu`。
+- 新增 `scripts/check_camera_imu_sync.py`。
 
-- [ ] Pi 端：`rgbd_sync` + 压缩，降到 2–5Hz（rtabmap 检测频率本来就是 2Hz），带宽目标 < 2 MB/s。
-- [ ] 4070S 端：rtabmap 以支持 torch 的方式编译。
-  - 局部特征：`Kp/DetectorStrategy=11`（SuperPoint）+ `Vis/CorNNType=6`（SuperGlue）。
-  - 回环：加全局描述子（NetVLAD 一类，rtabmap 的 Python 描述子接口，需验证编译选项）。
-- [ ] 解除 `Reg/Force3DoF`：EKF 关掉 `two_d_mode`，融合 Madgwick 的 roll/pitch，用于坡道（配合 P2 的 VIO 提供 z）。
-- [ ] 多会话光照不变：同一场所在不同光照下各建一次，合并成一张图（Labbé 2022 的做法，仓库已支持续图）。
-- [ ] supervisor 增加 `slam_3d_remote` 模式：Pi 只起同步和压缩，后端在 4070S 上，`map→odom` 回传。
+**需要在 Pi 上测**：
+- [ ] 开 `camera_imu:=true` 后，记录 Pi 的 CPU 和 USB 是否稳定，相机有没有掉线。
+- [ ] 跑 `check_camera_imu_sync.py` 并量出：
+  - IMU 频率和抖动；
+  - IMU 与图像各自的"时间戳 − 接收时间"，判断是否同一时钟；
+  - 彩色与深度的时间戳偏移（用于收紧 rgbd_sync）。
 
-**验收**：P1 的昼夜重定位场景成功率提升；误回环数不增加。
+**决策**：
+- IMU 时间戳和图像同钟、抖动小于 1ms，走紧耦合 VIO 路线（P2 优先）。
+- 不同钟或抖动很大，只能做松耦合。这时重点转向学习特征和后端（P3 优先），轮速仍是 EKF 的主要输入。
 
-### P4 — 暗光和极端场景（约 1–2 周，部分需要硬件）
+### S — 快速验证（约 2 周，回答 80% 的问题）
 
-- [ ] 暗光跟踪改用 IR 流。投射器点阵会骗特征跟踪，要么关投射器加外置 850/940nm 补光灯，要么做逐帧交替（看驱动是否支持）。
-- [ ] 外置红外补光：先估成本和功耗，注意 USB 供电已经很紧张，见 `power_troubleshooting.md`。
-- [ ] 坡道：P3 解除 3DoF 后跑 P1 的坡道数据，看 3D 地图是否还会扭曲。
-- [ ] 隧道和长走廊：ICP 用点到面 + `Icp/PointToPlaneMinComplexity` 拒绝退化修正；回环阈值收紧。
+1. **录数据**（第 1 周）：用 `scripts/record_3d_bag.sh`，已加入相机 IMU 话题，录 3 段，全部带雷达作真值：
+   - 快速原地旋转（看跟踪是否稳定）；
+   - 关灯或暗光（看暗光表现）；
+   - 多房间大回环（看全局一致性）。
+2. **4070S 离线对比**（第 2 周），同一份 bag 跑：
+   - 基线：现有 RTAB-Map + EKF；
+   - ORB-SLAM3 RGB-D-Inertial（S0 判定 IMU 可用时）或 RGB-D 模式；
+   - MASt3R-SLAM（学习型稠密方法，只用彩色）。
+3. **评测**：雷达 ICP 轨迹作参考，用 `evo` 算 ATE / RPE，统计跟踪丢失率。
+4. 同时从 `/rtabmap/info` 记录 Pi 上的处理耗时，用来设 `TimeThr`。
 
-### P5 — 去雷达实验与结论（约 1 周）
+**决策点**：
+- VIO 明显优于基线，投 P2。
+- 学习方法明显优于基线，投 P3。
+- 都没有明显提升，说明瓶颈在相机硬件。按 A 档出结论，不再继续后面的阶段。
 
-- [ ] 全链路关闭 `subscribe_scan`，用纯视觉方案重跑全部场景，和"视觉 + 雷达"对比。
-- [ ] 稠密几何和外观对比：MASt3R-SLAM 离线重建、现有 3DGS 管线、RTAB-Map 点云三者对比。
-- [ ] 结论文档：每个场景"纯视觉够用 / 需要雷达 / 都不行"，以及推荐配置。
+### P2 — VIO 前端（条件：S 显示 VIO 有收益）
 
-## 4. 风险与未知
+| 方案 | 特点 |
+|---|---|
+| RTAB-Map `rgbd_odometry`（F2M）+ IMU 作初值 | 零新依赖，对照组 |
+| ORB-SLAM3 RGB-D-Inertial | 成熟的紧耦合基线 |
+| OpenVINS / Basalt | 最可能在 Pi 5 上实时跑 |
+| VIW-Fusion 类（视觉 + IMU + 轮速） | 专治地面车尺度不可观；但我们的轮速是 cmd_vel 积分，收益需实测 |
+
+- [ ] 选出的方案作为 EKF 的 `odom1` 接入：只融合 vx/vy/vyaw，跟丢时把协方差拉大。
+- [ ] 测 Pi 5 能否实时跑；跑不动就放在 4070S 上，只服务建图，不服务控制。
+
+### P3 — 后端上 4070S（条件：S 显示学习特征或学习方法有收益）
+
+- [ ] Pi 和 4070S 用 chrony 对时，偏差 < 1ms。
+- [ ] Pi 端发布 `rgbd_sync` 的压缩输出，降到 2–5Hz，带宽目标 < 2 MB/s。P0 已经引入 `rgbd_sync`，这一步只需要加压缩和节流。
+- [ ] 4070S：rtabmap 带 torch 编译，用 SuperPoint（`Kp/DetectorStrategy=11`）+ SuperGlue（`Vis/CorNNType=6`），再加全局描述子回环。用 Docker 隔离。
+- [ ] supervisor 加 `slam_3d_remote` 模式：后端在 4070S 上跑，`map→odom` 回传；断网时 Pi 端的 EKF 照常工作。
+- [ ] 多光照、多会话建图（Labbé 2022 的做法）。
+
+### P4 — 极端场景（条件：A/B 档已完成，用户明确要 C 档）
+
+- [ ] 坡道：EKF 关 `two_d_mode` 并融合 roll/pitch，rtabmap 解除 `Force3DoF`。
+- [ ] 暗光：改用 IR 流跟踪；投射器点阵会干扰特征，要么关投射器加外置红外补光，要么逐帧交替。外置补光要先评估 USB 供电余量。
+- [ ] 隧道、长走廊：ICP 用点到面 + `Icp/PointToPlaneMinComplexity`；如实记录极限，不强求。
+
+### P5 — 去雷达结论
+
+- [ ] 全链路关闭 `subscribe_scan`，重跑所有已录场景，按场景给出"纯视觉够用 / 需要雷达 / 都不行"。
+
+### 和自主探索的关系
+
+本计划只负责地图的质量和鲁棒性，不包含自主探索。探索（Frontier + Nav2）另走 `feat/autonomous-navigation` 分支，它消费这里产出的 `/rtabmap/grid_map` 和 `map→odom`。P0 修好的栅格地图是探索的直接前提。
+
+## 5. 风险与未知
 
 | 风险 | 缓解 |
 |---|---|
@@ -150,9 +183,11 @@ rgbd_sync + 压缩                  ◀──── map→odom TF（低频）─
 | rtabmap torch 编译复杂 | 用 Docker 隔离在 4070S 上 |
 | 长直、重复纹理的隧道 | 纯视觉的物理极限，P5 如实记录，不强求 |
 
-## 5. 下一步
+## 6. 下一步
 
-先做 P0（稳定现网），同时开 P1 的第一项：`camera.launch.py` 加 `enable_imu` 开关，并实测 Gemini 2 的 IMU 时间戳。
+1. 在 Pi 上部署 `feat/3d-mapping-p0` 分支，按 P0 的"需要在 Pi 上做"清单逐项验证。
+2. 开 `camera_imu:=true`，跑 `scripts/check_camera_imu_sync.py`，做 S0 决策。
+3. 录 S 阶段的 3 段 bag，带到 4070S 上做离线对比。
 
 ## 参考
 

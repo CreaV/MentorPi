@@ -39,10 +39,14 @@ class CameraWatchdog(Node):
         # 也充当恢复失败后的重试间隔 (兜底无限重试)。
         self.declare_parameter('startup_grace', 60.0)
         self.declare_parameter('usb_id', '2bc5:0670')
+        # Extra camera.launch.py arguments, space-separated "name:=value"
+        # (e.g. "enable_imu:=true"; base.launch.py fills this from camera_imu).
+        self.declare_parameter('launch_args', '')
 
         self._stall_timeout = self.get_parameter('stall_timeout').value
         self._grace = self.get_parameter('startup_grace').value
         self._usb_id = self.get_parameter('usb_id').value
+        self._launch_args = self.get_parameter('launch_args').value.split()
 
         self._proc: subprocess.Popen | None = None
         self._started_at = 0.0
@@ -66,7 +70,8 @@ class CameraWatchdog(Node):
     # ------- subprocess lifecycle -------
 
     def _start(self):
-        cmd = ['ros2', 'launch', 'mentorpi_bringup', 'camera.launch.py']
+        cmd = ['ros2', 'launch', 'mentorpi_bringup', 'camera.launch.py',
+               *self._launch_args]
         self.get_logger().info(f'starting camera: {" ".join(cmd)}')
         # New session => own process group, so SIGINT reaches the whole tree
         # (ros2 launch + component_container).

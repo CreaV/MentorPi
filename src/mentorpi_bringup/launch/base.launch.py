@@ -26,6 +26,7 @@ def generate_launch_description():
     robot_xacro = os.path.join(description_dir, 'urdf', 'mentorpi.xacro')
 
     with_so101 = LaunchConfiguration('with_so101')
+    camera_imu = LaunchConfiguration('camera_imu')
 
     return LaunchDescription([
         # SO-101 机械臂已物理安装时置 true: URDF 长出臂 TF 树, 雷达输出
@@ -33,6 +34,10 @@ def generate_launch_description():
         # 未装臂保持 false —— TF/扫描链路与从前完全一致。
         DeclareLaunchArgument('with_so101', default_value='false',
             description='SO-101 arm installed: arm TF tree + lidar rear-sector mask'),
+        # Gemini 2 自带 IMU (视觉惯性实验用, docs/vision_mapping_roadmap.md S0)。
+        # 默认关: SLAM 融合的是 STM32 IMU, 开相机 IMU 只多占 USB 带宽。
+        DeclareLaunchArgument('camera_imu', default_value='false',
+            description='Enable the Gemini 2 built-in IMU (/camera/gyro_accel/sample)'),
 
         # Fixed geometry comes from xacro. Runtime mode omits base_footprint
         # (EKF owns odom->base_link) and Orbbec-owned camera internal frames.
@@ -105,6 +110,10 @@ def generate_launch_description():
             executable='camera_watchdog',
             name='camera_watchdog',
             output='screen',
+            parameters=[{
+                'launch_args': ParameterValue(
+                    ['enable_imu:=', camera_imu], value_type=str),
+            }],
         ),
 
         # Bounded motion primitives (voice / VLA / agent execution substrate).

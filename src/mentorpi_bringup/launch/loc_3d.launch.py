@@ -12,47 +12,10 @@ from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
+from mentorpi_bringup import rtabmap_params as rp
+
 
 def generate_launch_description():
-    # Keep these dicts in sync with slam_3d.launch.py (launch files are not
-    # importable as modules from each other under ament, so they are inlined).
-    topic_params = {
-        'frame_id': 'base_link',
-        'odom_frame_id': 'odom',
-        'subscribe_depth': True,
-        'subscribe_rgb': True,
-        'subscribe_scan': True,
-        'subscribe_odom_info': False,
-        'approx_sync': True,
-        'topic_queue_size': 20,
-        'sync_queue_size': 20,
-        'qos_scan': 2,
-    }
-
-    tuning_params = {
-        'Reg/Force3DoF': 'true',
-        'Reg/Strategy': '1',
-        'RGBD/NeighborLinkRefining': 'true',
-        'RGBD/ProximityBySpace': 'true',
-        'RGBD/ProximityPathMaxNeighbors': '10',
-        'Icp/VoxelSize': '0.05',
-        'Icp/MaxCorrespondenceDistance': '0.15',
-        'Icp/CorrespondenceRatio': '0.2',
-        'Icp/MaxTranslation': '0.5',
-        'Icp/PointToPlane': 'false',
-        'Rtabmap/DetectionRate': '2.0',
-        # 定位模式只读不写库, 门槛可以比建图松: 薄图(短扫描/少回环)下
-        # 3.0 会把仅略超阈值的正确定位也拒掉 (实测 3.11 被拒)。
-        'RGBD/OptimizeMaxError': '5.0',
-        'Kp/MaxFeatures': '300',
-        'Grid/Sensor': '2',
-        'Grid/MaxGroundHeight': '0.05',
-        'Grid/MaxObstacleHeight': '1.5',
-        'Grid/RangeMax': '5.0',
-        'Grid/3D': 'true',
-        'GridGlobal/MinSize': '20.0',
-    }
-
     database_path_arg = DeclareLaunchArgument(
         'database_path', default_value='~/rtabmap_maps/rtabmap.db',
         description='Existing RTAB-Map database to localize against')
@@ -62,13 +25,23 @@ def generate_launch_description():
         database_path_arg,
 
         Node(
+            package='rtabmap_sync',
+            executable='rgbd_sync',
+            name='rgbd_sync',
+            output='screen',
+            parameters=[rp.RGBD_SYNC_PARAMS],
+            remappings=rp.RGBD_SYNC_REMAPPINGS,
+        ),
+
+        Node(
             package='rtabmap_slam',
             executable='rtabmap',
             name='rtabmap',
             output='screen',
             parameters=[{
-                **topic_params,
-                **tuning_params,
+                # Shared with slam_3d (mentorpi_bringup/rtabmap_params.py),
+                # plus the looser localization-only OptimizeMaxError.
+                **rp.loc_params(),
                 'database_path': database_path,
                 # Localization mode: read-only map, relocalize + track.
                 'Mem/IncrementalMemory': 'false',
@@ -77,13 +50,10 @@ def generate_launch_description():
                 # origin — usually much closer to the truth after a reboot.
                 'RGBD/SavedLocalizationIgnored': 'false',
             }],
-            remappings=[
-                ('rgb/image', '/camera/color/image_raw'),
-                ('rgb/camera_info', '/camera/color/camera_info'),
-                ('depth/image', '/camera/depth/image_raw'),
-                ('scan', '/scan'),
-                ('odom', '/odometry/filtered'),
-            ],
+            remappings=rp.REMAPPINGS,
+            # 定位模式退出时也会写库 (保存最后定位位姿), 同样给足时间。
+            sigterm_timeout=rp.RTABMAP_SIGTERM_TIMEOUT,
+            sigkill_timeout=rp.RTABMAP_SIGKILL_TIMEOUT,
         ),
 
         # 注: 定位模式不再起 point_cloud_xyzrgb —— 实时彩色点云只是预览,

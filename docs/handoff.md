@@ -1,19 +1,39 @@
 # Agent Handoff
 
 - 更新时间：2026-10-03
-- 分支：`docs/vision-mapping-roadmap`（基于 `main` `1380831`，已推送，未开 PR）
+- 分支：`feat/3d-mapping-p0`（基于 `docs/vision-mapping-roadmap`，后者基于 `main` `1380831`）；两个分支都已推送，都没开 PR、没合入 main
 - 运行环境：本会话在**云端容器**的新克隆上进行，不是 dev 机，也没有 Pi 硬件。用户自有的未跟踪目录 `rtabmap_maps_pi/` 在 dev 机上，这里没有；回到 dev 机仍然**勿动**。
-- 工作树：本会话的 roadmap 和本交接已提交到上述分支并推送，工作树 clean。
+- 工作树：clean（本会话所有改动已提交并推送）
 
 本文是整个仓库唯一的滚动会话交接。下一次 agent 先读本文，结束时重写覆盖。
 
-## 本会话（2026-10-03）：3D 建图审查 + 纯视觉建图极限 roadmap
+## 本会话（2026-10-03）：3D 建图审查 + 纯视觉建图极限 roadmap + P0/S0 代码
 
-纯讨论和规划，**没有改任何功能代码，也没有跑任何构建或测试**。以下结论都来自读源码，没有在 Pi 上验证。
+### 0. 代码改动（`feat/3d-mapping-p0`，**未在 Pi 上构建或运行**）
 
-### 1. 3D 建图代码审查发现（待修，按优先级）
+这个容器里没有 ROS，只做了 py_compile、flake8 和纯 Python 的 pytest（`scripts/tests/test_check_camera_imu_sync.py` 8 个、`src/mentorpi_bringup/test/test_rtabmap_params.py` 7 个，全部通过）。**colcon build 和 launch 都没跑过。**
 
-1. **数据库可能仍会在落盘时被强杀。**supervisor 给 3D 模式 SIGINT 后等 90s（`supervisor_node.py:227`），但中间那层 `ros2 launch` 默认约 5s 转 SIGTERM、再过约 5s 发 SIGKILL，仓库里没有设 `sigterm_timeout` / `sigkill_timeout`。clock-jump-guard 的重启也依赖这个宽限。修法：`_start_mode` 追加 `sigterm_timeout:=60 sigkill_timeout:=30`。这两个参数以 launch 参数形式传入是否生效，需要在 Jazzy 上实测。
+- `mentorpi_bringup/rtabmap_params.py`：slam_3d / loc_3d 共用的 rtabmap 参数，取代原来两份手工同步的副本。
+- 新增 `rgbd_sync` 节点；rtabmap 改为 `subscribe_rgbd` + scan，话题 `/camera/rgbd_image`，`approx_sync_max_interval=0.034`。
+- rtabmap Node 设 `sigterm_timeout=85` / `sigkill_timeout=15`，修复数据库落盘时被 SIGKILL 的问题。
+- `Grid/MaxGroundHeight` 从 0.05 改为 -0.0105（相对 `base_link`，即离地约 4cm）。
+- `camera_imu:=true` 参数链：remote → base → camera_watchdog 的 `launch_args` → `camera.launch.py` 的 `enable_imu`（附带 `imu_rate`，默认 200hz）。
+- `record_3d_bag.sh` 增加相机 IMU 话题、`/scan_raw`、`/rtabmap/info`。
+- 新增 `scripts/check_camera_imu_sync.py`：S0 判定，看时钟域、IMU 抖动、彩色与深度的偏移。
+- `CLAUDE.md` 同步了上述变化；`docs/vision_mapping_roadmap.md` 改为修订版，加入目标档位 A/B/C 和"先快速验证、再按结果分支"的顺序。
+
+**Pi 上的验证清单**见 roadmap P0 的"需要在 Pi 上做"和 S0。重点检查：
+1. `colcon build --packages-select mentorpi_bringup mentorpi_supervisor` 通过。
+2. `slam_3d` 能起来，`/camera/rgbd_image` 有数据，rtabmap 在处理。
+3. 切到 idle 时日志里没有 SIGKILL。
+4. 栅格地图的地板没有出现假障碍。
+5. `camera_imu:=true` 时有 `/camera/gyro_accel/sample`；话题名是按 Orbbec v1 驱动推断的，需要实测确认。
+
+以下 1–3 节是本会话的讨论结论，都来自读源码。
+
+### 1. 3D 建图代码审查发现（第 1、2、4、6、7 项已在 `feat/3d-mapping-p0` 上改；第 3、5 项要等 Pi 数据）
+
+1. **数据库可能仍会在落盘时被强杀。**supervisor 给 3D 模式 SIGINT 后等 90s（`supervisor_node.py:227`），但中间那层 `ros2 launch` 默认约 5s 转 SIGTERM、再过约 5s 发 SIGKILL，仓库里没有设 `sigterm_timeout` / `sigkill_timeout`。clock-jump-guard 的重启也依赖这个宽限。实际修法：在 rtabmap 的 `Node(...)` 上直接传 `sigterm_timeout` / `sigkill_timeout`，不依赖 launch 参数的作用域。
 2. **地面阈值偏高 5cm。**`Grid/MaxGroundHeight: 0.05` 是相对 `base_link` 的，而 `base_link` 离地 0.0505m，所以实际阈值约离地 10cm，低障碍可能被当成地面。
 3. **相机俯仰角和低障虚拟激光不一致。**camera_joint 的 pitch = -0.1196 rad，即抬头约 6.9°；`camera.launch.py` 的 depth_low_scan 却按"无俯仰"设计（注释里的高度 0.18 / 0.095 也已过时，实际是 0.143 / 约 0.104）。需要先用平地点云核实旋转标定，再考虑改成 `base_link` 系的高度切片。
 4. RGB-D 同步太宽松：没设 `approx_sync_max_interval`，驱动没开帧同步，没用 `rgbd_sync`。
@@ -43,10 +63,12 @@
   - P4：暗光（IR）和极端场景。
   - P5：去掉雷达后的对比结论。
 
-### 下一步（等用户确认）
+### 下一步
 
-1. 决定是否把 `docs/vision-mapping-roadmap` 合入 main（可开 PR 或直接合并）。
-2. 是否开始修 P0：先修上面的第 1、2 项，然后在 `camera.launch.py` 加 `enable_imu` 开关。两项都需要 Pi 实测。
+1. 在 Pi 上部署 `feat/3d-mapping-p0` 并按上面的清单验证。验证通过后再合入 main：可以开 PR，也可以直接合并，由用户决定。
+2. S0：开 `camera_imu:=true`，运行 `/usr/bin/python3.12 scripts/check_camera_imu_sync.py`（先静止跑一次，再原地旋转跑一次），按 roadmap 的决策表选择方向。
+3. S：录 3 段 bag，带到 4070S 上做离线对比。
+4. 还没做：`Rtabmap/TimeThr`（等 `/rtabmap/info` 的耗时数据）、depth_low_scan 的俯仰问题（等平地点云核实）。
 
 ## 当前标定状态（权威值）
 

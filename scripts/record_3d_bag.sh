@@ -41,8 +41,19 @@ TOPICS=(
     /camera/color/camera_info
     /camera/depth/image_raw
     /camera/depth/camera_info
-    # MS200 lidar
+    # Gemini 2 built-in IMU — only published with camera_imu:=true
+    # (synced accel+gyro; the separate topics are listed in case sync
+    # output is off). Missing topics are simply not recorded.
+    /camera/gyro_accel/sample
+    /camera/accel/sample
+    /camera/gyro/sample
+    # MS200 lidar (with the SO-101 mounted, /scan is the masked output and
+    # /scan_raw the driver's)
     /scan
+    /scan_raw
+    # rtabmap per-frame timing/statistics — small, needed to size
+    # Rtabmap/TimeThr (docs/vision_mapping_roadmap.md S)
+    /rtabmap/info
     # Velocity command (useful for replay correlation)
     /cmd_vel
     # Optional rtabmap outputs — uncomment to capture map state during run.
@@ -50,7 +61,6 @@ TOPICS=(
     # /rtabmap/odom
     # /rtabmap/grid_map
     # /rtabmap/cloud_map
-    # /rtabmap/info
 )
 
 echo "Recording 3D-SLAM bag → $OUT_DIR"

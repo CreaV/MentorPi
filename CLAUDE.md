@@ -198,9 +198,9 @@ Architecture: **base 常驻 + 模式按需挂载**。`base.launch.py` 在 `remot
 | File | Package | Description |
 |------|---------|-------------|
 | `base.launch.py` | mentorpi_bringup | 常驻硬件: base_node + STM32 IMU Madgwick + EKF + camera_watchdog (托管 Gemini 2) + joy + teleop + lidar + robot_state_publisher (URDF 固定 TF: imu/camera/laser) + joint_state_publisher (轮子零位) |
-| `camera.launch.py` | mentorpi_bringup | Gemini 2 (RGB-D 15fps, IMU off)。**不直接进别的 launch** —— 由 `camera_watchdog` 节点 spawn 并监测 `/camera/depth/camera_info`,帧停发 >20s 或进程死亡时自动 `usbreset` + 重启 driver(修 openUsbDevice 卡死) |
+| `camera.launch.py` | mentorpi_bringup | Gemini 2 (RGB-D 15fps, IMU 默认关;`camera_imu:=true` 从 remote/base 经 watchdog 透传为 `enable_imu`,发 `/camera/gyro_accel/sample`,仅视觉惯性实验用)。**不直接进别的 launch** —— 由 `camera_watchdog` 节点 spawn 并监测 `/camera/depth/camera_info`,帧停发 >20s 或进程死亡时自动 `usbreset` + 重启 driver(修 openUsbDevice 卡死) |
 | `slam_2d.launch.py` | mentorpi_bringup | 仅 slam_toolbox 异步建图 |
-| `slam_3d.launch.py` | mentorpi_bringup | 仅 rtabmap + point_cloud_xyzrgb (相机已在 base 里跑)；融合 lidar `/scan` 做 NeighborLinkRefining + proximity detection 抗轮速打滑 |
+| `slam_3d.launch.py` | mentorpi_bringup | 仅 rgbd_sync + rtabmap + point_cloud_xyzrgb (相机已在 base 里跑；rtabmap 参数与 loc_3d 共用 `mentorpi_bringup/rtabmap_params.py`)；融合 lidar `/scan` 做 NeighborLinkRefining + proximity detection 抗轮速打滑 |
 | `loc_2d.launch.py` | mentorpi_bringup | 仅 slam_toolbox 定位 (吃 `map_file:=...`) |
 | `loc_3d.launch.py` | mentorpi_bringup | rtabmap 定位模式 (只读已有 .db，吃 `database_path:=...`)；重启后恢复 map 系位姿，供 live_rerun.py 3D 场景实时显示 |
 | `mapping.launch.py` | mentorpi_bringup | CLI 包装: base + slam_2d |
@@ -375,6 +375,7 @@ rtabmap 节点参数:
 
 | Param | Value | Notes |
 |-------|-------|-------|
+| `subscribe_rgbd` | `true` | RGB-D 先经 `rgbd_sync` 配对(`approx_sync_max_interval` 0.034s=半帧)再与 `/scan` 同步 |
 | `subscribe_odom_info` | `false` | 没有 rgbd_odometry,通过 TF 拿 odom |
 | `topic_queue_size` / `sync_queue_size` | `20` | 输入 15Hz vs 检测 2Hz,需要队列消化 |
 | `Rtabmap/DetectionRate` | `2.0` | Hz, Pi 5 friendly |
@@ -382,6 +383,8 @@ rtabmap 节点参数:
 | `RGBD/OptimizeMaxError` | `3.0` | |
 
 **Environment requirements:** RTAB-Map loop closure 仍依赖视觉特征。空白墙、暗光、低纹理环境下 loop closure 检测失败,机器人位姿改靠纯 dead-reckoning(轮速+IMU),漂移会累积直到下次回到有特征的区域触发 loop closure 校正。
+
+参数唯一来源是 `src/mentorpi_bringup/mentorpi_bringup/rtabmap_params.py`(slam_3d/loc_3d 共用,`test/test_rtabmap_params.py` 守护:rtabmap 核心参数必须是字符串、两模式只差 `LOC_TUNING_OVERRIDES`)。`Grid/*` 高度相对 `base_link`(离地 0.0505m),`Grid/MaxGroundHeight=-0.0105` 即离地约 4cm(0 对 rtabmap 表示禁用)。rtabmap Node 带 `sigterm_timeout=85`/`sigkill_timeout=15`,否则 ros2 launch 默认约 10s 就 SIGKILL,supervisor 的 90s 落库宽限形同虚设。
 
 **Avoid `Rtabmap/CreateIntermediateNodes=true`** — triggers `Memory.cpp:3473::addLink() Condition (fromS->getWeight() >= 0 && toS->getWeight() >=0) not met` FATAL crash on rtabmap startup. Leave it at the default (false).
 
